@@ -1518,7 +1518,7 @@
     };
 
     // ── profile link ──
-    const prof = section('Profile link', 'Double-click a username tab to open that account’s profile. Enter the web address of a profile page and put {username} where the username goes. Leave it empty to turn this off.');
+    const prof = section('Profile link', 'Double-click a username tab to open that account’s profile. Enter the web address of a profile page and put {username} where the username goes. Keep any characters the site needs around it, for example an @ before {username}. Use \u201cTry it\u201d below to check the result. Leave it empty to turn this off.');
     const input = document.createElement('input');
     input.className = 'set-input';
     input.type = 'url';
@@ -1550,7 +1550,30 @@
         });
       }, 450);
     });
-    prof.append(input, status, preview);
+    // Try it: type a real username and open the address this setting produces
+    const tryRow = document.createElement('div');
+    tryRow.className = 'set-try';
+    const tryIn = document.createElement('input');
+    tryIn.className = 'set-input set-try-input';
+    tryIn.type = 'text';
+    tryIn.placeholder = 'Try a username';
+    tryIn.autocomplete = 'off'; tryIn.autocapitalize = 'off'; tryIn.spellcheck = false;
+    const tryBtn = document.createElement('button');
+    tryBtn.className = 'set-btn';
+    tryBtn.textContent = 'Open';
+    const tryNow = () => {
+      const name = tryIn.value.trim().replace(/^@/, '');
+      // use what is typed above even if it has not finished saving
+      const t = input.value.trim();
+      const url = name && profileUrlTemplateOk(t) ? t.split('{username}').join(encodeURIComponent(name)) : '';
+      if (!url) { status.textContent = !name ? 'Type a username to try.' : 'Fix the address above first.'; return; }
+      status.textContent = 'Opened: ' + url;
+      window.open(url, '_blank', 'noopener');
+    };
+    tryBtn.addEventListener('click', tryNow);
+    tryIn.addEventListener('keydown', e => { if (e.key === 'Enter') tryNow(); });
+    tryRow.append(tryIn, tryBtn);
+    prof.append(input, status, preview, tryRow);
     paint();
     if (settings.profileUrl) status.textContent = 'Saved.';
 
@@ -6745,6 +6768,8 @@ render();
       .set-input { width: 100%; box-sizing: border-box; background: #444; border: 1px solid #303030; border-radius: 6px; color: #eee; font-size: 15px; padding: 9px 10px; outline: none; }
       .set-input:focus { border-color: #888; }
       .set-input.bad { border-color: #c55; }
+      .set-try { display: flex; gap: 8px; margin-top: 12px; }
+      .set-try-input { flex: 1; }
       .set-status { margin-top: 6px; font-size: 12px; color: #aaa; min-height: 16px; }
       .set-input.bad + .set-status { color: #e88; }
       .set-preview { margin-top: 2px; font-size: 12px; color: #888; word-break: break-all; }
