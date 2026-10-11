@@ -1240,7 +1240,15 @@
     listViewEl.style.display = 'flex';
     document.body.classList.add('sp-list-open');
     if (mobile) { activeMobileTab = 'favs'; updateMobileNavActive(); }
-    archiveDbPromise().then(() => { if (listTabKind === kind) renderListView(); }).catch(() => { if (listViewEl) listViewEl.innerHTML = '<div class="author-empty" style="padding:24px">No archive found yet. Once ttpull has downloaded something into this folder, it shows up here.</div>'; });
+    archiveDbPromise().then(() => { if (listTabKind === kind) renderListView(); }).catch(() => {
+      if (!listViewEl) return;
+      listViewEl.innerHTML = '<div class="author-empty" style="padding:24px">No archive found yet. Once ttpull has downloaded something into this folder, it shows up here.</div>';
+      ttpullStatus().then(st => {
+        if (st && st.initialized === false && listViewEl && listTabKind === kind) {
+          listViewEl.innerHTML = '<div class="author-empty" style="padding:24px">ttpull has not created the archive yet. Set DB_UPDATE=write on the ttpull container so it can create and update it.</div>';
+        }
+      });
+    });
     renderListView();
     syncNavActive();
   }
@@ -1331,6 +1339,11 @@
       grid.innerHTML = '';
       const q = listQuery.trim().toLowerCase();
       if (!_dbCache) { grid.textContent = 'Loading…'; return; }
+      if (following && !_dbCache.following) {
+        count.textContent = '0 accounts';
+        grid.appendChild(Object.assign(document.createElement('div'), { className: 'author-empty', textContent: 'This archive has no Following data. ttpull does not download the accounts you follow; this page fills in when the archive has a db_following.js file.' }));
+        return;
+      }
       if (following) {
         let list = followedAuthors();
         if (listScope.following === 'with') list = list.filter(a => a.videos > 0 || a.super);
@@ -1445,6 +1458,11 @@
     return fetch('/api/settings', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: patch }),
     }).then(r => (r.ok ? '' : 'The server did not accept that value.')).catch(() => 'Saved on this device only (the server could not be reached).');
+  }
+
+  // ttpull's own view of the archive (counts only), or null when ttpull is not reachable
+  function ttpullStatus() {
+    return fetch('/api/ttpull/archive-status').then(r => (r.ok ? r.json() : null)).then(d => (d && d.ok ? d.status : null)).catch(() => null);
   }
 
   // Address template -> address for one username ('' when no valid template is set)
@@ -1595,9 +1613,17 @@
       fact('Accounts followed', followedAuthors().length.toLocaleString());
       fact('Stars / groups', `${Object.keys(stars).length.toLocaleString()} / ${groups.length.toLocaleString()}`);
     } else {
-      fact('Archive', 'loading…');
+      fact('Archive', _dbFailed ? 'not available yet' : 'loading…');
     }
     arch.appendChild(list);
+    ttpullStatus().then(st => {
+      if (!st || !settingsTabActive || !list.isConnected) return;
+      fact('ttpull', st.initialized ? 'connected' : 'connected, archive not created yet');
+      if (st.lastWrite) {
+        const when = new Date(st.lastWrite);
+        if (!isNaN(when)) fact('Archive last updated', when.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }));
+      }
+    });
 
     // ── this device ──
     const dev = section('This device');
@@ -2697,9 +2723,11 @@
             el.textContent = (value === cur ? '✓ ' : '') + label;
             el.style.left = Math.max(10, r.left + r.width / 2 - 24) + 'px';
             el.style.top = (r.top - 26 - 46 * i) + 'px';
+            el.addEventListener('click', () => { closeFan(); if (value !== feedMode()) setFeedMode(value); });
             fan.appendChild(el);
             return { value, el };
           });
+          fan.addEventListener('click', e => { if (e.target === fan) closeFan(); });   // tap outside the options
           document.body.appendChild(fan);
           try { navigator.vibrate && navigator.vibrate(12); } catch (_) {}
         };
@@ -2721,8 +2749,9 @@
           clearTimeout(holdTimer);
           if (!fan) return;
           const pick = fanItems[hover];
-          closeFan();
-          if (pick && pick.value !== feedMode()) setFeedMode(pick.value);
+          if (pick) { closeFan(); if (pick.value !== feedMode()) setFeedMode(pick.value); return; }
+          // let go without sliding onto an option (the tab bar is too low to drag up from): keep the menu open to tap
+          fan.classList.add('sticky');
         });
         ['pointercancel'].forEach(t => btn.addEventListener(t, () => { clearTimeout(holdTimer); closeFan(); }));
         btn.addEventListener('contextmenu', e => e.preventDefault());
@@ -3089,7 +3118,7 @@
           disappeared = lk.downloaded.filter(n => !offSet.has(n)).length;
         }
 
-        // date from lastRun (timestamps in seconds)
+        // date from lastRun (seconds or milliseconds)
         let lastRunDate = null;
         if (lk && lk.lastRun) {
           const ts = Math.max(lk.lastRun.start || 0, lk.lastRun.finish || 0);
@@ -3120,7 +3149,8 @@
         if (downloaded > 0) p.appendChild(mkSpan(`⬇️ ${downloaded}`));
 
         if (lastRunDate) {
-          const d = new Date(lastRunDate * 1000);
+          // ttpull writes milliseconds, the original extension wrote seconds: accept both
+          const d = new Date(lastRunDate > 1e12 ? lastRunDate : lastRunDate * 1000);
           p.appendChild(mkSpan(`🏃🏼‍♀️ ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`));
         }
 
@@ -7504,6 +7534,8 @@ render();
           border: 1px solid rgba(255,255,255,.18); transition: transform .08s, background .08s;
         }
         .sp-fan-item.on { border-color: #fff; }
+        .sp-fan.sticky, .sp-fan.sticky .sp-fan-item { pointer-events: auto; }
+        .sp-fan-item:active { background: #fff; color: #000; }
         .sp-fan-item.hot { background: #fff; color: #000; transform: translateY(-50%) scale(1.1); }
 
 

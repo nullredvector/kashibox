@@ -109,6 +109,28 @@ http.createServer((req, res) => {
     return;
   }
 
+  // ttpull's view of the archive (counts only): used for the empty-archive message and the "last updated" line
+  if (pathname === '/api/ttpull/archive-status' && req.method === 'GET') {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 4000);
+    fetch(TTPULL_URL + '/archive/status', { signal: ctl.signal })
+      .then(r => { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
+      .then(st => {
+        const body = JSON.stringify({ ok: true, status: {
+          initialized: Boolean(st && st.initialized),
+          lastWrite: (st && typeof st.lastWrite === 'string') ? st.lastWrite : null,
+        } });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(body);
+      })
+      .catch(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok: false }));
+      })
+      .finally(() => clearTimeout(timer));
+    return;
+  }
+
   // ── autotagTT review API ───────────────────────────────────────────────────
   // GET  /api/autotag?tag=braces                      → pending suggestions + recorded decisions
   // POST /api/autotag/feedback {tag,id,decision,change?} → records one explicit decision
