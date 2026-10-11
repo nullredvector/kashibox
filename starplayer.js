@@ -6555,6 +6555,28 @@ render();
   let castReady   = false;
   let castSession = null;
 
+  // True when running inside the Kashibox iOS app (Capacitor native bridge)
+  const isCap = !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.KashiboxCast);
+
+  function initCapCast() {
+    if (!isCap) return;
+    const Plugin = window.Capacitor.Plugins.KashiboxCast;
+    const applyState = ({state}) => {
+      const connected = state === 'connected';
+      const available = state !== 'noDevicesAvailable';
+      castReady   = true;
+      castSession = connected ? Plugin : null;
+      const btn = document.getElementById('sp-cast-nav-btn');
+      if (btn) {
+        btn.style.display = available ? '' : 'none';
+        btn.classList.toggle('sp-cast-on', connected);
+      }
+      refreshCastOverlays();
+    };
+    Plugin.addListener('castStateChanged', applyState);
+    Plugin.getState().then(applyState).catch(() => {});
+  }
+
   // Must be set before the SDK script loads
   window['__onGCastApiAvailable'] = function(isAvailable) {
     if (!isAvailable) return;
@@ -6598,7 +6620,11 @@ render();
     if (!castSession) return;
     const videoUrl = window.location.origin + '/' + getVideoPath(coverSrc);
     const coverUrl = window.location.origin + '/' + coverSrc;
-    castSession.sendMessage(CAST_NS, { action: 'add', videoUrl, coverUrl }).catch(() => {});
+    if (isCap) {
+      window.Capacitor.Plugins.KashiboxCast.sendMessage({ data: { action: 'add', videoUrl, coverUrl } }).catch(() => {});
+    } else {
+      castSession.sendMessage(CAST_NS, { action: 'add', videoUrl, coverUrl }).catch(() => {});
+    }
   }
 
   const CAST_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-1 8H10c-.55 0-1 .45-1 1v7c0 .55.45 1 1 1h10c.55 0 1-.45 1-1v-7c0-.55-.45-1-1-1zm-1 7h-8v-5h8v5zM1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2C12 14.92 7.08 10 1 10z"/></svg>';
@@ -6615,15 +6641,18 @@ render();
     btn.style.display = 'none'; // hidden until SDK reports devices nearby
     btn.addEventListener('click', () => {
       if (!castReady) return;
-      if (castSession) {
-        cast.framework.CastContext.getInstance().endCurrentSession(true);
+      if (isCap) {
+        if (castSession) window.Capacitor.Plugins.KashiboxCast.endSession().catch(() => {});
+        else             window.Capacitor.Plugins.KashiboxCast.requestSession().catch(() => {});
       } else {
-        cast.framework.CastContext.getInstance().requestSession().catch(() => {});
+        if (castSession) cast.framework.CastContext.getInstance().endCurrentSession(true);
+        else             cast.framework.CastContext.getInstance().requestSession().catch(() => {});
       }
     });
 
     nav.appendChild(btn);
-    initCastSDK();
+    if (isCap) initCapCast();
+    else       initCastSDK();
   }
 
   function refreshCastOverlays() {
