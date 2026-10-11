@@ -1,0 +1,7 @@
+# local files and archive data must never be committed
+.DS_Store
+.claude/
+data/
+Archive.html
+node_modules/
+*.log

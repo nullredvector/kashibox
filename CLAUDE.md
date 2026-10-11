@@ -1,0 +1,46 @@
+# CLAUDE.md
+
+Guidance for Claude Code (claude.ai/code) when working in this repository.
+
+## What this is
+
+**kashibox**: a self-hosted player and organizer for a saved-video archive. A small Node server (`server.js`) serves one page (`shell.html`), one browser script (`starplayer.js`) and a few JSON APIs; the archive folder (database files and media) is mounted into the container. There is no build step and no package manager: all JS is plain JavaScript.
+
+Run locally: `ARCHIVE_DIR=/path/to/archive PORT=9560 node server.js`, then open `http://localhost:9560`. The phone UI is the same script at widths under 768 px.
+
+## Files
+
+| File | Role |
+| --- | --- |
+| `shell.html` | the page (header, nav, `<main>`); loads `/starplayer.js` |
+| `starplayer.js` | all UI: Stars, Likes, Favorites, Following, username tabs, sessions, pop-out player, phone feed/tagging/gestures, ranker, watch log, review tab |
+| `server.js` | serves the page, the script, icons, the archive's files (range requests, caching) and `/api/*` |
+| `db_stars.js` | storage for `stars.json` / `sessions.json` (atomic writes, revisioned saves) |
+| `assets/` | icons and logo (also served by the server) |
+| `Dockerfile`, `entrypoint.sh`, `docker-compose.yml`, `.github/workflows/` | image build and deployment |
+
+## The archive folder
+
+```
+<archive>/data/.appdata/   db_videos.js db_authors.js db_texts.js db_likes.js db_bookmarked.js db_following.js   (read-only for kashibox)
+                           stars.json sessions.json watch.json autotag*    (written by kashibox)
+<archive>/data/Likes|Favorites/{covers,videos}/<id>.jpg|mp4
+<archive>/data/Following/Avatars/small_<account>.jpg and <account>/{covers,videos}/
+```
+
+`db_*.js` files are `window.<name>_base64="<base64(gzip(JSON))>"`. The official lists are newest-first. Videos and covers are served with cache headers; everything else is revalidated.
+
+## Architecture notes
+
+- `starplayer.js` is one IIFE. State lives in module-level `let`s; views are shown/hidden by `showStarsTab`, `showListTab`, `showAuthorTab`, `showLogTab`, `showAutotagTab` (phones also use `setMobileTab`). Keep that pattern and always hide the other views first.
+- Phone layout: `isMobilePlayer()` (< 768 px) switches to the bottom nav `#sp-mobile-nav`; the Home feed is a scroll-snap list in `#player-view` built by `renderMobileScrollFeed`.
+- Gestures use a document-level handler (`setupMobileSwipe`). The username page and grid-opened videos own a history entry (`navPush`/`navPopQuiet`).
+- Looping videos are left to the browser; a watcher holds the last frame over the loop point, swaps to an in-memory copy after the first loop and restarts stalled videos.
+
+## Working rules
+
+- Work on branch `star-breakaway` (CI publishes `ghcr.io/nullredvector/starplayer:testing`); `master` publishes `:latest`, which the production container pulls automatically. Merge to `master` only when the user asks: tag the current master as `pre-<feature>`, open a PR with a Rollback section, merge with a merge commit.
+- Test changes in a browser against a **synthetic** archive (fake ids, generated images/videos), including a phone-sized window.
+- **Privacy:** never read or print the user's group/tag names, and never send images/videos to any API or cloud service.
+- Do not name the source platform in code comments, commit messages, descriptions or docs; say "kashibox" or "the archive".
+- Bump nothing else by hand: there is no version file; images are tagged by branch.
