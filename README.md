@@ -18,7 +18,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 - **Stars** (the default page): star videos, put them into groups, give them levels, and filter by *All tagged*, *All stars*, *Super stars*, *Untagged* or *Disappeared*.
 - **Super stars:** press and hold any star button (about half a second) to turn it into a blue sparkle star. Super stars have their own category under *All stars*, and the account that posted one is highlighted and sorted to the top of the Following page. Tap a super star to remove it, hold it again to make it a normal star.
 - **Likes** and **Favorites:** your downloaded collections, with *Current* (what is still listed), *Disappeared* (downloaded but no longer listed) and *All*, plus search.
-- **Following:** the accounts you follow, with avatar, name, follower count and how many of their videos you have. Show only the accounts with videos, or everyone. Click an account to open its videos.
+- **Following:** the accounts you follow, with avatar, name, follower count and how many of their videos you have. Show only the accounts with videos, or everyone. Click an account to open its videos. It needs a `db_following.js` in the archive; ttpull does not download followed accounts, so for an archive it builds this page just says there is no Following data.
 - **Settings** (the gear right of the Player button; on a phone, the gear in the Library header): the profile link, a summary of your archive and a device info box. Settings are saved on the server, so every device shares them.
 
 ### Organize
@@ -129,7 +129,7 @@ The UI is part of the image, so updating the image updates the UI.
 
 ## Companion projects
 
-- **ttpull**: a headless downloader that keeps the archive topped up on a schedule.
+- **ttpull**: a headless downloader that keeps the archive topped up on a schedule. It creates a new archive folder on first start and keeps the database files up to date. Set `DB_UPDATE=write` on the ttpull container: its default is `dry`, which only logs what it would change. Settings shows ttpull's connection and when the archive was last updated.
 - **autotagTT**: a local, GPU-friendly service that suggests tags. Suggestions only; it never changes your groups by itself.
 
 Both are optional. kashibox works without them.
