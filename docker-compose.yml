@@ -1,0 +1,38 @@
+services:
+  starplayer:
+    image: ghcr.io/nullredvector/starplayer:latest
+    restart: unless-stopped
+    ports:
+      - "9494:8080"
+    volumes:
+      - /mnt/zion/enc/archive/Downloads/incomplete/content2/shorts:/archive
+    environment:
+      - ARCHIVE_DIR=/archive
+      # Where the live log tab reads ttpull's /logs (same compose project => reachable by service name)
+      - TTPULL_URL=${TTPULL_URL:-http://ttpull:3847}
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  startesting:
+    image: ghcr.io/nullredvector/starplayer:testing
+    restart: unless-stopped
+    ports:
+      - "9495:8080"
+    volumes:
+      - /mnt/zion/enc/archive/Downloads/incomplete/content2/shorts/testing:/archive
+    environment:
+      - ARCHIVE_DIR=/archive
+      - TTPULL_URL=${TTPULL_URL:-http://ttpull:3847}
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=30
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_LABEL_ENABLE=true
