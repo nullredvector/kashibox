@@ -15,7 +15,7 @@ Run locally: `ARCHIVE_DIR=/path/to/archive PORT=9560 node server.js`, then open 
 | `shell.html` | the page (header, nav, `<main>`); loads `/starplayer.js` |
 | `starplayer.js` | all UI: Stars, Likes, Favorites, Following, username tabs, sessions, pop-out player, phone feed/tagging/gestures, ranker, watch log, review tab |
 | `server.js` | serves the page, the script, icons, the archive's files (range requests, caching) and `/api/*` |
-| `db_stars.js` | storage for `stars.json` / `sessions.json` (atomic writes, revisioned saves) |
+| `db_stars.js` | storage for `stars.json` / `sessions.json` / `settings.json` (atomic writes, revisioned saves, a whitelist for settings) |
 | `assets/` | icons and logo (also served by the server) |
 | `Dockerfile`, `entrypoint.sh`, `docker-compose.yml`, `.github/workflows/` | image build and deployment |
 
@@ -23,7 +23,7 @@ Run locally: `ARCHIVE_DIR=/path/to/archive PORT=9560 node server.js`, then open 
 
 ```
 <archive>/data/.appdata/   db_videos.js db_authors.js db_texts.js db_likes.js db_bookmarked.js db_following.js   (read-only for kashibox)
-                           stars.json sessions.json watch.json autotag*    (written by kashibox)
+                           stars.json sessions.json settings.json watch.json autotag*    (written by kashibox)
 <archive>/data/Likes|Favorites/{covers,videos}/<id>.jpg|mp4
 <archive>/data/Following/Avatars/small_<account>.jpg and <account>/{covers,videos}/
 ```
@@ -34,6 +34,8 @@ Run locally: `ARCHIVE_DIR=/path/to/archive PORT=9560 node server.js`, then open 
 
 - `starplayer.js` is one IIFE. State lives in module-level `let`s; views are shown/hidden by `showStarsTab`, `showListTab`, `showAuthorTab`, `showLogTab`, `showAutotagTab` (phones also use `setMobileTab`). Keep that pattern and always hide the other views first.
 - Phone layout: `isMobilePlayer()` (< 768 px) switches to the bottom nav `#sp-mobile-nav`; the Home feed is a scroll-snap list in `#player-view` built by `renderMobileScrollFeed`.
+- A star is `stars[id]`; a super star is the same entry with `super: true` (long-press on a star button: `starGesture`, `toggleSuperStar`, `paintStarBtn`). Super-star accounts come from `superAuthorIds()` and drive the Following page highlight. The pop-out window has its own small copy of the star logic.
+- Settings (`settings.json`, `/api/settings`, the gear page) only accept whitelisted keys; today that is `profileUrl`, an `http(s)://` address containing `{username}`. Add a key to `cleanSettings` in `db_stars.js` before using it in the page.
 - Gestures use a document-level handler (`setupMobileSwipe`). The username page and grid-opened videos own a history entry (`navPush`/`navPopQuiet`).
 - Looping videos are left to the browser; a watcher holds the last frame over the loop point, swaps to an in-memory copy after the first loop and restarts stalled videos.
 

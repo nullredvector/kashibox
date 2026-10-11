@@ -233,6 +233,34 @@ http.createServer((req, res) => {
     res.writeHead(405); res.end('Method not allowed'); return;
   }
 
+  // ── Settings API ───────────────────────────────────────────────────────────
+  if (pathname === '/api/settings') {
+    if (req.method === 'GET') {
+      const body = JSON.stringify({ settings: dbStars.loadSettings() });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });
+      res.end(body);
+      return;
+    }
+    if (req.method === 'PUT') {
+      let chunks = [], size = 0;
+      req.on('data', c => { size += c.length; if (size < 20000) chunks.push(c); });
+      req.on('end', () => {
+        try {
+          if (size >= 20000) throw new Error('too large');
+          const data = JSON.parse(Buffer.concat(chunks).toString());
+          const saved = dbStars.saveSettings(data.settings);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, settings: saved }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid settings' }));
+        }
+      });
+      return;
+    }
+    res.writeHead(405); res.end('Method not allowed'); return;
+  }
+
   if (pathname === '/' || pathname === '/index.html' || pathname === '/shell') {
     fs.readFile(SHELL_FILE, (err, html) => {
       if (err) { res.writeHead(500); res.end('shell.html missing'); return; }
