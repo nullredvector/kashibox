@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const ARCHIVE_DIR = process.env.ARCHIVE_DIR || '/archive';
 const STARS_FILE  = path.join(ARCHIVE_DIR, 'data', '.appdata', 'stars.json');
 const SESSIONS_FILE = path.join(ARCHIVE_DIR, 'data', '.appdata', 'sessions.json');
+const SETTINGS_FILE = path.join(ARCHIVE_DIR, 'data', '.appdata', 'settings.json');
 
 function load() {
   try {
@@ -73,6 +74,34 @@ function save(data) {
   const tmp  = STARS_FILE + '.tmp';
   fs.writeFileSync(tmp, json, 'utf8');
   fs.renameSync(tmp, STARS_FILE);
+}
+
+// ── Settings (settings.json): small, whitelisted, shared by every device ──
+//   profileUrl  address opened when a username tab is double-clicked; {username} stands for the username ('' = off)
+function cleanSettings(input) {
+  const s = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
+  const out = {};
+  if (typeof s.profileUrl === 'string') {
+    const u = s.profileUrl.trim();
+    if (u.length > 300) throw new Error('profileUrl too long');
+    if (u && !(/^https?:\/\//i.test(u) && u.includes('{username}'))) throw new Error('profileUrl needs http(s):// and {username}');
+    out.profileUrl = u;
+  }
+  return out;
+}
+
+function loadSettings() {
+  try { return cleanSettings(JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'))); } catch (_) { return {}; }
+}
+
+function saveSettings(patch) {
+  const next = Object.assign(loadSettings(), cleanSettings(patch));
+  const dir = path.dirname(SETTINGS_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = SETTINGS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf8');
+  fs.renameSync(tmp, SETTINGS_FILE);
+  return next;
 }
 
 function loadSessions() {
@@ -362,4 +391,4 @@ function saveSchedule(d) {
   return { code: 200, ok: true };
 }
 
-module.exports = { load, loadWithRev, saveGuarded, currentRev, save, loadSessions, saveSessions, loadAutotag, recordFeedback, loadAiTags, loadTagsConfig, saveTagsConfig, loadWatch, mergeWatch, runStatus, requestRun, saveSchedule, requestNotifyTest, saveFramesConfig };
+module.exports = { loadSettings, saveSettings, load, loadWithRev, saveGuarded, currentRev, save, loadSessions, saveSessions, loadAutotag, recordFeedback, loadAiTags, loadTagsConfig, saveTagsConfig, loadWatch, mergeWatch, runStatus, requestRun, saveSchedule, requestNotifyTest, saveFramesConfig };

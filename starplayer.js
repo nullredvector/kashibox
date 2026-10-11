@@ -6,10 +6,22 @@
   // PERSISTENCE  (server-first with localStorage fallback)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  const STARS_KEY  = 'myfavett_stars_v1';
-  const GROUPS_KEY = 'myfavett_groups_v1';
-  const LEVELS_KEY = 'myfavett_levels_v1';
-  const OLD_KEY    = 'myfavett_favorites_v1';
+  const STARS_KEY  = 'kashibox_stars_v1';
+  const GROUPS_KEY = 'kashibox_groups_v1';
+  const LEVELS_KEY = 'kashibox_levels_v1';
+  const OLD_KEY    = 'kashibox_favorites_v1';
+
+  // Browsers that saved data under the earlier names keep it: move it over once, then drop the old names
+  (function migrateStorageNames() {
+    try {
+      [['myfavett_stars_v1', STARS_KEY], ['myfavett_groups_v1', GROUPS_KEY], ['myfavett_levels_v1', LEVELS_KEY], ['myfavett_favorites_v1', OLD_KEY]].forEach(([from, to]) => {
+        const v = localStorage.getItem(from);
+        if (v === null) return;
+        if (localStorage.getItem(to) === null) localStorage.setItem(to, v);
+        localStorage.removeItem(from);
+      });
+    } catch (_) {}
+  })();
 
   let serverAvailable = false;
   let _syncTimer      = null;
@@ -1150,6 +1162,7 @@
   function showListTab(kind) {
     if (!LIST_PAGES[kind]) return;
     const mobile = isMobilePlayer();
+    if (settingsTabActive) hideSettingsView();
     // Already showing this page (e.g. coming back from a video): leave the scroll position alone
     if (listTabKind === kind && listViewEl && listViewEl.style.display !== 'none') { syncNavActive(); return; }
     if (autotagTabActive) hideAutotagView();
@@ -1190,9 +1203,10 @@
     const nav = document.querySelector('nav');
     if (!nav) return;
     const sel = activeAuthorId ? null
+      : settingsTabActive ? '.settings-tab'
       : listTabKind ? ({ likes: '.likes', bookmarked: '.bookmarked', following: '.following' })[listTabKind]
       : starsTabActive ? '.stars-tab' : logTabActive ? '.log-tab' : autotagTabActive ? '.autotag-tab' : null;
-    ['.likes', '.bookmarked', '.following', '.stars-tab', '.log-tab', '.autotag-tab'].forEach(x => {
+    ['.likes', '.bookmarked', '.following', '.stars-tab', '.log-tab', '.autotag-tab', '.settings-tab'].forEach(x => {
       nav.querySelector(x)?.classList.toggle('active', x === sel);
     });
   }
@@ -1248,7 +1262,12 @@
     let searchTimer = null;
     search.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { listQuery = search.value; body(); }, 200); });
 
-    header.append(title, count, seg, scope, search);
+    const gear = document.createElement('button');
+    gear.className = 'list-gear';
+    gear.title = 'Settings';
+    gear.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">' + GEAR_PATH + '</svg>';
+    gear.addEventListener('click', () => showSettingsTab());
+    header.append(title, count, gear, seg, scope, search);
     if (!following) header.appendChild(buildGridControls(meta.sort, grid, listViewEl));
     listViewEl.appendChild(header);
     listViewEl.appendChild(grid);
@@ -1335,6 +1354,177 @@
     return card;
   }
 
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SETTINGS — the gear page. Stored on the server (settings.json) so every device shares them.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const GEAR_PATH = '<path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>';
+  const SETTINGS_KEY = 'sp_settings';
+  let settings = { profileUrl: '' };
+  let settingsTabActive = false;
+  let settingsViewEl = null;
+
+  (function loadSettingsInit() {
+    try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch (_) {}
+    fetch('/api/settings').then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!d || !d.settings) return;
+      Object.assign(settings, d.settings);
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
+      if (typeof syncAuthorTabs === 'function') syncAuthorTabs();
+      if (settingsTabActive) renderSettingsView();
+    }).catch(() => {});
+  })();
+
+  // Save changes; resolves to an error message, or '' when it was saved
+  function saveSettings(patch) {
+    Object.assign(settings, patch);
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
+    return fetch('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: patch }),
+    }).then(r => (r.ok ? '' : 'The server did not accept that value.')).catch(() => 'Saved on this device only (the server could not be reached).');
+  }
+
+  // Address template -> address for one username ('' when no valid template is set)
+  function profileUrlTemplateOk(t) { return /^https?:\/\//i.test(t) && t.includes('{username}'); }
+  function profileUrlFor(name) {
+    const t = String(settings.profileUrl || '').trim();
+    return profileUrlTemplateOk(t) ? t.split('{username}').join(encodeURIComponent(name)) : '';
+  }
+
+  function showSettingsTab() {
+    const mobile = isMobilePlayer();
+    if (settingsTabActive && settingsViewEl && settingsViewEl.style.display !== 'none') return;
+    if (!mobile) {
+      if (listTabKind) hideListView();
+      if (autotagTabActive) hideAutotagView();
+      if (logTabActive) hideLogView();
+      if (activeAuthorId) hideAuthorView(false);
+      if (starsTabActive) {
+        starsTabActive = false;
+        if (starsViewEl) { releaseGridPreviews(starsViewEl); starsViewEl.style.display = 'none'; }
+      }
+      closePlayer();
+      document.querySelector('main')?.style.setProperty('display', 'none');
+    }
+    closeVideoOverlay();
+    settingsTabActive = true;
+    if (!settingsViewEl) {
+      settingsViewEl = document.createElement('div');
+      settingsViewEl.id = 'settings-view';
+      const main = document.querySelector('main');
+      if (main && !mobile) main.parentNode.insertBefore(settingsViewEl, main); else document.body.appendChild(settingsViewEl);
+    }
+    settingsViewEl.style.display = 'flex';
+    renderSettingsView();
+    syncNavActive();
+    archiveDbPromise().then(() => { if (settingsTabActive) renderSettingsView(); }).catch(() => {});
+  }
+
+  function hideSettingsView() {
+    settingsTabActive = false;
+    if (settingsViewEl) settingsViewEl.style.display = 'none';
+    syncNavActive();
+  }
+
+  function renderSettingsView() {
+    if (!settingsViewEl || !settingsTabActive) return;
+    const keepFocus = settingsViewEl.contains(document.activeElement) && document.activeElement.tagName === 'INPUT';
+    if (keepFocus) return;   // do not rebuild the page under someone who is typing
+    settingsViewEl.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'set-wrap';
+
+    const head = document.createElement('div');
+    head.className = 'set-head';
+    const back = document.createElement('button');
+    back.className = 'set-back';
+    back.textContent = '‹ Back';
+    back.addEventListener('click', () => hideSettingsView());
+    const h = document.createElement('h2');
+    h.textContent = 'Settings';
+    head.append(back, h);
+    wrap.appendChild(head);
+
+    const section = (title, note) => {
+      const sec = document.createElement('section');
+      sec.className = 'set-section';
+      const t = document.createElement('h3'); t.textContent = title; sec.appendChild(t);
+      if (note) { const n = document.createElement('p'); n.className = 'set-note'; n.textContent = note; sec.appendChild(n); }
+      wrap.appendChild(sec);
+      return sec;
+    };
+
+    // ── profile link ──
+    const prof = section('Profile link', 'Double-click a username tab to open that account’s profile. Enter the web address of a profile page and put {username} where the username goes. Leave it empty to turn this off.');
+    const input = document.createElement('input');
+    input.className = 'set-input';
+    input.type = 'url';
+    input.placeholder = 'https://example.com/@{username}';
+    input.value = settings.profileUrl || '';
+    input.autocomplete = 'off'; input.autocapitalize = 'off'; input.spellcheck = false;
+    const status = document.createElement('div');
+    status.className = 'set-status';
+    const preview = document.createElement('div');
+    preview.className = 'set-preview';
+    const paint = () => {
+      const v = input.value.trim();
+      const ok = !v || profileUrlTemplateOk(v);
+      input.classList.toggle('bad', !ok);
+      if (!v) { status.textContent = 'Off: double-clicking a username tab does nothing.'; preview.textContent = ''; return; }
+      if (!ok) { status.textContent = 'Needs to start with http:// or https:// and contain {username}.'; preview.textContent = ''; return; }
+      preview.textContent = 'Example: ' + v.split('{username}').join('example');
+    };
+    let timer = null;
+    input.addEventListener('input', () => {
+      paint();
+      clearTimeout(timer);
+      const v = input.value.trim();
+      if (v && !profileUrlTemplateOk(v)) return;
+      timer = setTimeout(() => {
+        saveSettings({ profileUrl: v }).then(msg => {
+          status.textContent = msg || (v ? 'Saved.' : 'Off: double-clicking a username tab does nothing.');
+          syncAuthorTabs();
+        });
+      }, 450);
+    });
+    prof.append(input, status, preview);
+    paint();
+    if (settings.profileUrl) status.textContent = 'Saved.';
+
+    // ── archive summary ──
+    const d = _dbCache;
+    const arch = section('Archive');
+    const list = document.createElement('div');
+    list.className = 'set-facts';
+    const fact = (label, value) => {
+      const row = document.createElement('div');
+      const a = document.createElement('span'); a.textContent = label;
+      const b = document.createElement('b'); b.textContent = value;
+      row.append(a, b); list.appendChild(row);
+    };
+    if (d) {
+      fact('Videos in the database', Object.keys(d.videos).length.toLocaleString());
+      fact('Likes downloaded', (((d.likes && d.likes.downloaded) || []).length).toLocaleString());
+      fact('Favorites downloaded', (((d.bookmarked && d.bookmarked.downloaded) || []).length).toLocaleString());
+      fact('Accounts followed', followedAuthors().length.toLocaleString());
+      fact('Stars / groups', `${Object.keys(stars).length.toLocaleString()} / ${groups.length.toLocaleString()}`);
+    } else {
+      fact('Archive', 'loading…');
+    }
+    arch.appendChild(list);
+
+    // ── this device ──
+    const dev = section('This device');
+    const info = document.createElement('button');
+    info.className = 'set-btn';
+    info.textContent = 'Show device info';
+    info.addEventListener('click', () => showDeviceInfo());
+    dev.appendChild(info);
+
+    settingsViewEl.appendChild(wrap);
+  }
+
   let starsTabActive = false;
   let starsViewEl    = null;
   let activeView       = '__tagged__'; // null (All Stars / selected groups) | '__tagged__' | '__lvl_groups__' | '__ungrouped__' (Untagged) | '__disappeared__'
@@ -1360,6 +1550,7 @@
   }
 
   function showStarsTab() {
+    if (settingsTabActive) hideSettingsView();
     if (listTabKind) hideListView();
     if (autotagTabActive) hideAutotagView();
     if (logTabActive) hideLogView();
@@ -1385,6 +1576,7 @@
   }
 
   function showMainContent() {
+    if (settingsTabActive) hideSettingsView();
     if (listTabKind) hideListView();
     if (autotagTabActive) hideAutotagView();
     if (logTabActive) hideLogView();
@@ -2229,6 +2421,7 @@
   }
 
   function setMobileTab(tab, skipAnim) {
+    if (settingsTabActive) hideSettingsView();
     if (listTabKind && tab !== 'favs') hideListView();
     // Leaving the Home feed: remember the list and the video the user was on, so coming back resumes there
     if (tab !== 'home' && activeMobileTab === 'home' && playerOpen && !playerReturnTab && !homeStash && playerVideoList.length) {
@@ -2372,8 +2565,49 @@
       btn.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">${svg}</svg><span>${label}</span>`;
       let held = false, holdTimer = null;
       if (id === 'home') {
-        btn.addEventListener('pointerdown', () => { held = false; clearTimeout(holdTimer); holdTimer = setTimeout(() => { held = true; showDeviceInfo(); }, 700); });
-        ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => btn.addEventListener(t, () => clearTimeout(holdTimer)));
+        // Press and hold the Home tab: a small fan with the feed orders; slide onto one and let go to pick it
+        let fan = null, fanItems = [], hover = -1;
+        const closeFan = () => { if (fan) fan.remove(); fan = null; fanItems = []; hover = -1; };
+        const openFan = () => {
+          const r = btn.getBoundingClientRect();
+          const cur = feedMode();
+          fan = document.createElement('div');
+          fan.className = 'sp-fan';
+          const opts = [['ranked', '★ Ranked'], ['shuffle', '⤨ Shuffle']];
+          fanItems = opts.map(([value, label], i) => {
+            const el = document.createElement('div');
+            el.className = 'sp-fan-item' + (value === cur ? ' on' : '');
+            el.textContent = (value === cur ? '✓ ' : '') + label;
+            el.style.left = Math.max(10, r.left + r.width / 2 - 24) + 'px';
+            el.style.top = (r.top - 26 - 46 * i) + 'px';
+            fan.appendChild(el);
+            return { value, el };
+          });
+          document.body.appendChild(fan);
+          try { navigator.vibrate && navigator.vibrate(12); } catch (_) {}
+        };
+        const track = (x, y) => {
+          let h = -1;
+          fanItems.forEach((it, i) => {
+            const b = it.el.getBoundingClientRect();
+            if (x >= b.left - 8 && x <= b.right + 8 && y >= b.top - 10 && y <= b.bottom + 10) h = i;
+          });
+          if (h !== hover) { hover = h; fanItems.forEach((it, i) => it.el.classList.toggle('hot', i === h)); }
+        };
+        btn.addEventListener('pointerdown', e => {
+          held = false; clearTimeout(holdTimer);
+          try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+          holdTimer = setTimeout(() => { held = true; openFan(); }, 420);
+        });
+        btn.addEventListener('pointermove', e => { if (fan) track(e.clientX, e.clientY); });
+        btn.addEventListener('pointerup', () => {
+          clearTimeout(holdTimer);
+          if (!fan) return;
+          const pick = fanItems[hover];
+          closeFan();
+          if (pick && pick.value !== feedMode()) setFeedMode(pick.value);
+        });
+        ['pointercancel'].forEach(t => btn.addEventListener(t, () => { clearTimeout(holdTimer); closeFan(); }));
         btn.addEventListener('contextmenu', e => e.preventDefault());
       }
       btn.addEventListener('click', () => { if (held) { held = false; return; } setMobileTab(id); });
@@ -2585,7 +2819,7 @@
       _tt = Date.now();
       _swipeDir = null; _swiping = false; _pull = null; _under = null;
       const t = e.target;
-      if (t.closest && t.closest('input, .grid-controls, select, textarea, .sp-seek, .sp-tag-btn, .sp-sheet, .sp-sheet-back, .sp-radial')) _ctx = 'none';
+      if (t.closest && t.closest('input, .grid-controls, select, textarea, .sp-seek, .sp-tag-btn, .sp-sheet, .sp-sheet-back, .sp-radial, #settings-view')) _ctx = 'none';
       else if (authorViewOpen() && authorViewEl.contains(t)) _ctx = 'author';
       else if (playerViewEl && playerViewEl.style.display !== 'none' && playerViewEl.contains(t)) _ctx = playerReturnTab ? 'pr' : 'feed';
       else _ctx = 'tabs';
@@ -3053,6 +3287,14 @@
       [a[i], a[j]] = [a[j], a[i]];
     }
     return a;
+  }
+
+  // Change how the Home feed is ordered (Ranked or Shuffle). A new order starts from the top.
+  function setFeedMode(mode) {
+    try { localStorage.setItem('sp_feed_mode', mode === 'shuffle' ? 'shuffle' : 'ranked'); } catch (_) {}
+    homeResume = null;
+    spToast('Home feed: ' + (mode === 'shuffle' ? 'Shuffle' : 'Ranked'));
+    if (isMobilePlayer() && activeMobileTab === 'home' && playerOpen && !playerReturnTab) { closePlayer(); openPlayer(); }
   }
 
   function feedMode() {
@@ -3557,21 +3799,6 @@
     metaEl.append(authorEl, captionEl);
     ctrlLayer.appendChild(metaEl);
 
-    // Home feed only: switch between the ranked order and a plain shuffle
-    if (activeMobileTab === 'home' && !playerReturnTab) {
-      const modeBtn = document.createElement('button');
-      modeBtn.className = 'player-feed-mode';
-      modeBtn.textContent = feedMode() === 'ranked' ? '★ Ranked' : '⤨ Shuffle';
-      modeBtn.title = 'Tap to switch between the ranked feed and a plain shuffle';
-      modeBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        try { localStorage.setItem('sp_feed_mode', feedMode() === 'ranked' ? 'shuffle' : 'ranked'); } catch (_) {}
-        homeResume = null;   // a new order starts from the top
-        closePlayer();
-        openPlayer();
-      });
-      metaEl.insertBefore(modeBtn, metaEl.firstChild);   // Ranked/Shuffle sits above the username
-    }
 
     overlay.appendChild(ctrlLayer);
 
@@ -4416,6 +4643,7 @@ render();
     if (activeAuthorId) return { kind: 'author', id: activeAuthorId };
     if (autotagTabActive) return { kind: 'autotag' };
     if (logTabActive) return { kind: 'log' };
+    if (settingsTabActive) return { kind: 'settings' };
     if (listTabKind) return { kind: 'list', list: listTabKind };
     if (starsTabActive) return { kind: 'stars' };
     return { kind: 'stars' };   // the app's own pages (Likes, Favorites, Following, Explain)
@@ -4441,6 +4669,7 @@ render();
         break;
       }
       case 'list':    showListTab(d.list); return;
+      case 'settings': showSettingsTab(); return;
       case 'autotag': showAutotagTab(); return;
       case 'log':     showLogTab();     return;
     }
@@ -4468,6 +4697,7 @@ render();
       document.querySelectorAll('#player-view video').forEach(v => v.pause());
       navPush('author');
     } else {
+      if (settingsTabActive) hideSettingsView();
       if (listTabKind) hideListView();
       if (starsTabActive) {
         starsTabActive = false;
@@ -4597,7 +4827,7 @@ render();
         tab = document.createElement('div');
         tab.className = 'author-tab pressable';
         tab.dataset.id = a.id;
-        tab.title = '@' + a.name + ' — double-click to open the profile';
+        tab.title = '@' + a.name;
         const label = document.createElement('span');
         label.className = 'author-tab-label';
         label.textContent = '@' + a.name;
@@ -4610,13 +4840,15 @@ render();
         tab.addEventListener('click', () => { if (activeAuthorId !== a.id) showAuthorTab(a.id, a.name); });
         tab.addEventListener('dblclick', e => {
           if (e.target.closest('.author-tab-close')) return;
-          window.open('https://www.tiktok.com/@' + encodeURIComponent(a.name), '_blank', 'noopener');
+          const url = profileUrlFor(a.name);
+          if (url) window.open(url, '_blank', 'noopener');
         });
         const last = [...nav.querySelectorAll('.author-tab')].pop()
           || nav.querySelector('.player-tab') || nav.querySelector('.stars-tab');
         last?.insertAdjacentElement('afterend', tab);
       }
       tab.classList.toggle('active', a.id === activeAuthorId);
+      tab.title = '@' + a.name + (profileUrlFor(a.name) ? ' — double-click to open the profile' : '');
     });
   }
 
@@ -5050,6 +5282,7 @@ render();
 
   function showLogTab() {
     if (isMobilePlayer() || logTabActive) return;
+    if (settingsTabActive) hideSettingsView();
     if (listTabKind) hideListView();
     if (autotagTabActive) hideAutotagView();
     if (activeAuthorId) hideAuthorView();
@@ -5353,6 +5586,7 @@ render();
 
   function showAutotagTab() {
     if (autotagTabActive) return;
+    if (settingsTabActive && !isMobilePlayer()) hideSettingsView();
     if (listTabKind && !isMobilePlayer()) hideListView();
     if (activeAuthorId) hideAuthorView();
     if (logTabActive) hideLogView();
@@ -6042,6 +6276,17 @@ render();
       }
     }
 
+    // Settings — the gear, right of the player button
+    if (!nav.querySelector('.settings-tab')) {
+      const tab = makeNavTab('settings-tab',
+        GEAR_PATH,
+        'Settings',
+        () => showSettingsTab()
+      );
+      if (settingsTabActive) tab.classList.add('active');
+      nav.appendChild(tab);
+    }
+
     // Live log tab — last in the nav, right-aligned so it sits against the search field
     if (!nav.querySelector('.log-tab')) {
       const tab = makeNavTab('log-tab',
@@ -6129,7 +6374,7 @@ render();
 
 
       /* ── Stars & Player nav tabs ── */
-      nav .stars-tab, nav .player-tab, nav .session-tab, nav .log-tab, nav .autotag-tab {
+      nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab {
         display: flex; align-items: center;
         cursor: pointer; border-bottom: 3px solid transparent; color: inherit;
         white-space: nowrap;
@@ -6137,20 +6382,20 @@ render();
 
       /* ── Icon-only top nav (labels hidden; title tooltips added in JS) ── */
       nav { margin-left: 20px !important; }
-      nav .likes, nav .bookmarked, nav .following, nav .stars-tab, nav .player-tab, nav .session-tab, nav .log-tab, nav .autotag-tab {
+      nav .likes, nav .bookmarked, nav .following, nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab {
         font-size: 0 !important; gap: 0 !important;
         margin: 3.3px 2px 0 !important; padding: 0 14px !important;
         justify-content: center; border-radius: 6px 6px 0 0;
         transition: color .15s, background .15s;
       }
-      nav .likes svg, nav .bookmarked svg, nav .following svg, nav .stars-tab svg, nav .player-tab svg, nav .session-tab svg, nav .log-tab svg, nav .autotag-tab svg {
+      nav .likes svg, nav .bookmarked svg, nav .following svg, nav .stars-tab svg, nav .player-tab svg, nav .session-tab svg, nav .settings-tab svg, nav .log-tab svg, nav .autotag-tab svg {
         width: 20px !important; height: 20px !important; margin: 0 !important;
       }
       nav .likes:not(.active):hover, nav .bookmarked:not(.active):hover,
-      nav .following:not(.active):hover, nav .stars-tab:not(.active):hover, nav .player-tab:not(.active):hover, nav .session-tab:not(.menu-open):hover, nav .log-tab:not(.active):hover, nav .autotag-tab:not(.active):hover {
+      nav .following:not(.active):hover, nav .stars-tab:not(.active):hover, nav .player-tab:not(.active):hover, nav .session-tab:not(.menu-open):hover, nav .settings-tab:not(.active):hover, nav .log-tab:not(.active):hover, nav .autotag-tab:not(.active):hover {
         color: var(--active, #d7d7d7); background: rgba(255,255,255,.05);
       }
-      nav .likes.active, nav .bookmarked.active, nav .following.active, nav .stars-tab.active, nav .player-tab.active, nav .session-tab.menu-open, nav .log-tab.active, nav .autotag-tab.active {
+      nav .likes.active, nav .bookmarked.active, nav .following.active, nav .stars-tab.active, nav .player-tab.active, nav .session-tab.menu-open, nav .settings-tab.active, nav .log-tab.active, nav .autotag-tab.active {
         color: var(--active, #d7d7d7); background: rgba(255,255,255,.09);
         border-bottom: 3px solid var(--active, #d7d7d7); cursor: default;
       }
@@ -6185,21 +6430,23 @@ render();
         color: var(--inactive, rgb(160,160,160)) !important;
         background: none !important; border-bottom-color: transparent !important;
       }
-      /* ── Player + Sessions buttons sit at the right end of the header ──
+      /* ── Settings, Player and Sessions buttons sit at the right end of the header ──
          They stay in the nav DOM (other code looks up "nav .player-tab")
          and are positioned out of the flow instead. */
       @media (min-width: 769px) {
         header:has(> nav) {
           position: relative;
-          padding-right: calc(var(--left-padding, 20px) + 112px) !important;
+          padding-right: calc(var(--left-padding, 20px) + 168px) !important;
         }
+        header:has(> nav) nav .settings-tab,
         header:has(> nav) nav .player-tab,
         header:has(> nav) nav .session-tab {
           position: absolute !important; z-index: 2; top: 3.3px !important; bottom: 0; margin: 0 !important;
           box-sizing: border-box; width: 52px; padding: 0 !important;
         }
-        header:has(> nav) nav .player-tab  { right: var(--left-padding, 20px); }
-        header:has(> nav) nav .session-tab { right: calc(var(--left-padding, 20px) + 56px); }
+        header:has(> nav) nav .settings-tab { right: var(--left-padding, 20px); }
+        header:has(> nav) nav .player-tab   { right: calc(var(--left-padding, 20px) + 56px); }
+        header:has(> nav) nav .session-tab  { right: calc(var(--left-padding, 20px) + 112px); }
       }
 
       #autotag-view { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; position: relative; }
@@ -6321,11 +6568,6 @@ render();
       .grid-size { width: 110px; height: 16px; margin: 0; accent-color: #aaa; cursor: pointer; }
       .preview-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
       .stars-grid-cover.is-playing::after { display: none; }
-      .player-feed-mode {
-        position: absolute; top: 12px; left: 12px; pointer-events: auto;
-        background: rgba(0,0,0,.55); color: #ddd; border: none; border-radius: 14px;
-        padding: 4px 11px; font-size: 12px; line-height: 18px; cursor: pointer;
-      }
       .player-slide.needs-tap::after {
         content: '▶'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
         width: 64px; height: 64px; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff;
@@ -6372,6 +6614,28 @@ render();
         #author-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 8px; }
       }
 
+
+
+      /* ── Settings page ── */
+      #settings-view { display: none; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
+      .set-wrap { width: 100%; max-width: 640px; box-sizing: border-box; padding: 18px 22px 40px; }
+      .set-head { display: flex; align-items: baseline; gap: 12px; }
+      .set-head h2 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
+      .set-back { display: none; background: none; border: none; color: #8ab4f8; font-size: 16px; padding: 0; cursor: pointer; }
+      .set-section { margin-top: 22px; padding-top: 16px; border-top: 1px solid #444; }
+      .set-section h3 { margin: 0 0 6px; font-size: 14px; font-weight: 700; color: #eee; text-transform: uppercase; letter-spacing: .5px; }
+      .set-note { margin: 0 0 10px; font-size: 13px; line-height: 1.5; color: #aaa; }
+      .set-input { width: 100%; box-sizing: border-box; background: #444; border: 1px solid #303030; border-radius: 6px; color: #eee; font-size: 15px; padding: 9px 10px; outline: none; }
+      .set-input:focus { border-color: #888; }
+      .set-input.bad { border-color: #c55; }
+      .set-status { margin-top: 6px; font-size: 12px; color: #aaa; min-height: 16px; }
+      .set-input.bad + .set-status { color: #e88; }
+      .set-preview { margin-top: 2px; font-size: 12px; color: #888; word-break: break-all; }
+      .set-facts > div { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 14px; border-bottom: 1px solid #3c3c3c; color: #bbb; }
+      .set-facts b { color: #eee; font-weight: 600; }
+      .set-btn { background: rgba(255,255,255,.1); border: 1px solid #555; border-radius: 8px; color: #ddd; padding: 8px 14px; font-size: 14px; cursor: pointer; }
+      .set-btn:hover { background: rgba(255,255,255,.18); }
+      .list-gear { display: none; background: none; border: none; color: #ddd; padding: 2px; cursor: pointer; }
 
       /* ── Library pages (Likes, Favorites, Following) ── */
       #list-view { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
@@ -7068,12 +7332,6 @@ render();
         #player-view #player-overlay-controls .player-overlay-close {
           top: calc(var(--sp-top) + 8px); left: 6px; right: auto; width: 44px; height: 44px; font-size: 24px;
         }
-        /* Ranked / Shuffle sits at the top of the username box, above the username */
-        #player-view #player-overlay-controls .player-meta .player-feed-mode {
-          position: static; transform: none; align-self: flex-start; margin-bottom: 2px;
-          background: rgba(255,255,255,.2); color: #fff; font-weight: 700; font-size: 12px; line-height: 18px;
-          padding: 3px 11px; border-radius: 14px; text-shadow: none;
-        }
 
         /* who and what, bottom-left like the reference */
         #player-view #player-overlay-controls .player-author {
@@ -7097,6 +7355,22 @@ render();
           opacity: 0; transition: opacity .12s; pointer-events: none;
         }
         .sp-seek.scrubbing .sp-seek-time { opacity: 1; }
+        .sp-fan { position: fixed; inset: 0; z-index: 9000; background: rgba(0,0,0,.45); pointer-events: none; }
+        .sp-fan-item {
+          position: absolute; transform: translateY(-50%); padding: 10px 18px; border-radius: 20px;
+          background: rgba(40,40,40,.96); color: #fff; font-size: 15px; white-space: nowrap;
+          border: 1px solid rgba(255,255,255,.18); transition: transform .08s, background .08s;
+        }
+        .sp-fan-item.on { border-color: #fff; }
+        .sp-fan-item.hot { background: #fff; color: #000; transform: translateY(-50%) scale(1.1); }
+
+
+        /* Settings on phones: a full-screen page above the tab bar, reached from the gear in the Library header */
+        #settings-view { position: fixed; inset: 0; bottom: var(--sp-nav-h) !important; padding-top: var(--sp-top); box-sizing: border-box; z-index: 650; background: #0d0d0d; }
+        .set-back { display: inline-block; }
+        .set-wrap { max-width: none; padding: 14px 16px 40px; }
+        .list-gear { display: block; margin-left: auto; order: 1; }
+        .set-input { font-size: 16px; }
 
         /* Library pages on phones: a full-screen page above the tab bar */
         #list-view { position: fixed; inset: 0; bottom: var(--sp-nav-h) !important; padding-top: var(--sp-top); box-sizing: border-box; z-index: 500; background: #0d0d0d; }

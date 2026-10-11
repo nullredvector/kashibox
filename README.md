@@ -18,6 +18,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 - **Stars** (the default page): star videos, put them into groups, give them levels, and filter by *All stars*, *All tagged*, *Untagged* or *Disappeared*.
 - **Likes** and **Favorites:** your downloaded collections, with *Current* (what is still listed), *Disappeared* (downloaded but no longer listed) and *All*, plus search.
 - **Following:** the accounts you follow, with avatar, name, follower count and how many of their videos you have. Show only the accounts with videos, or everyone. Click an account to open its videos.
+- **Settings** (the gear right of the Player button; on a phone, the gear in the Library header): the profile link, a summary of your archive and a device info box. Settings are saved on the server, so every device shares them.
 
 ### Organize
 - **Groups as tags:** a video can be in any number of groups. The same groups drive filtering, the phone tagging UI and the feed ranking.
@@ -26,13 +27,13 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 - **Built for big archives:** grids are filled in chunks as you scroll, so a collection with tens of thousands of videos stays responsive.
 
 ### Browse by creator
-- **Username tabs:** click a creator's name anywhere to open all of their videos in a tab of their own.
+- **Username tabs:** click a creator's name anywhere to open all of their videos in a tab of their own. Double-click a tab to open that account's profile page, if you have set a profile link in Settings (an address with `{username}` in it).
 - **Tab sessions:** open tabs are saved automatically as sessions you can restore, rename or delete later.
 - **Player window:** a pop-out player that doesn't disturb the tab you are on, with the same star, tag and level tools.
 
 ### On your phone
 - **Home feed:** a full-screen, edge-to-edge, endless vertical feed that autoplays and loops, with a seek bar above the tab bar and plain white icon buttons. Hold a finger on a video to play it at 2×; double-tap to like.
-- **Ranked or shuffled:** the Home feed is ordered from your stars, tags and how you actually watch (see below), or you can switch to a plain shuffle. Leave and come back and it resumes on the video you were on.
+- **Ranked or shuffled:** the Home feed is ordered from your stars, tags and how you actually watch (see below), or switch to a plain shuffle by pressing and holding the Home tab and sliding onto your choice. Leave and come back and it resumes on the video you were on.
 - **Gestures:** swipe left on a video to pull that creator's page over the screen, swipe right to push it back. A video opened from a grid is dismissed the same way.
 - **Tagging while you watch:** tap the tag button for a bottom sheet of your tags (with search and "create"), or press and hold for a radial fan of your most recent tags. Every change has an Undo.
 - **Tab bar:** Home, Stars, Recents, Library (Likes, Favorites and Following) and Review.
@@ -52,7 +53,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
  Browser ──►  server.js ──►  /                 the page (shell.html)
                  │           /starplayer.js     all the UI above, served from the image
                  │
-                 ├─ /api/stars, /api/sessions, /api/watch, /api/autotag*   (JSON files in the archive)
+                 ├─ /api/stars, /api/sessions, /api/settings, /api/watch, /api/autotag*   (JSON files in the archive)
                  ├─ /api/ttpull/logs                                       (proxy to ttpull, optional)
                  └─ the archive's videos and covers, with HTTP range requests and caching
 ```
@@ -67,7 +68,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
     .appdata/
       db_videos.js  db_authors.js  db_texts.js     videos, accounts, captions
       db_likes.js   db_bookmarked.js  db_following.js   what is in each collection
-      stars.json  sessions.json  watch.json         written by kashibox
+      stars.json  sessions.json  settings.json  watch.json   written by kashibox
     Likes/      covers/<id>.jpg   videos/<id>.mp4
     Favorites/  covers/<id>.jpg   videos/<id>.mp4
     Following/  Avatars/small_<account>.jpg
@@ -80,6 +81,7 @@ The `db_*.js` files are `window.<name>_base64="…"` (gzip-compressed JSON, base
 | --- | --- |
 | `stars.json` | stars, groups and levels |
 | `sessions.json` | saved username-tab sessions |
+| `settings.json` | your settings (the profile link) |
 | `watch.json` | the phone feed's watch log |
 
 ## Quick start (Docker)
