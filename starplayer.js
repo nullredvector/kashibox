@@ -539,12 +539,19 @@
 
   // Tap and long-press on a star button: the tap does onTap, holding for about half a second does onHold
   function starGesture(btn, onTap, onHold) {
-    let timer = null, held = false;
-    btn.addEventListener('pointerdown', () => {
-      held = false; clearTimeout(timer);
-      timer = setTimeout(() => { held = true; try { navigator.vibrate && navigator.vibrate(15); } catch (_) {} onHold(); }, 450);
-    });
-    ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => btn.addEventListener(t, () => clearTimeout(timer)));
+    let timer = null, held = false, sx = 0, sy = 0;
+    // Touch and pointer events both start the hold (whichever arrives first wins). A pointercancel does not end it:
+    // iOS can send one in the middle of a long press even though the finger is still down; touchend/touchcancel end it.
+    const start = (x, y) => {
+      if (timer) return;
+      held = false; sx = x; sy = y;
+      timer = setTimeout(() => { timer = null; held = true; try { navigator.vibrate && navigator.vibrate(15); } catch (_) {} onHold(); }, 450);
+    };
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    btn.addEventListener('pointerdown', e => start(e.clientX, e.clientY));
+    btn.addEventListener('touchstart', e => { const t = e.touches[0]; start(t.clientX, t.clientY); }, { passive: true });
+    btn.addEventListener('touchmove', e => { const t = e.touches[0]; if (Math.hypot(t.clientX - sx, t.clientY - sy) > 16) cancel(); }, { passive: true });
+    ['pointerup', 'touchend', 'touchcancel', 'mouseleave'].forEach(t => btn.addEventListener(t, cancel, { passive: true }));
     btn.addEventListener('click', e => { e.stopPropagation(); if (held) { held = false; return; } onTap(e); });
     btn.addEventListener('contextmenu', e => e.preventDefault());
   }
@@ -2569,6 +2576,7 @@
     // Leaving the Home feed: remember the list and the video the user was on, so coming back resumes there
     if (tab !== 'home' && activeMobileTab === 'home' && playerOpen && !playerReturnTab && !homeStash && playerVideoList.length) {
       homeResume = { list: playerVideoList, pos: playerColumnOffsets[0] || 0, pool: homeFeedPool };
+      spTrace('home: left at ' + homeResume.pos);
     }
     if (homeStash) {
       if (playerOpen) closePlayer();
@@ -2679,6 +2687,7 @@
       'safe inset t/r/b/l: ' + ins,
       'inner: ' + innerWidth + 'x' + innerHeight + ' | screen: ' + screen.width + 'x' + screen.height + (vv ? ' | visual: ' + Math.round(vv.width) + 'x' + Math.round(vv.height) : ''),
       'player-view: ' + rect('#player-view') + ' | nav: ' + rect('#sp-mobile-nav'),
+      'events: ' + ((() => { try { return JSON.parse(localStorage.getItem('sp_trace') || '[]').slice(-6).join(' | ') || '(none)'; } catch (_) { return '?'; } })()),
       'loops: ' + ((() => { try { return JSON.parse(localStorage.getItem('sp_looplog') || '[]').slice(-5).join(' | ') || '(none yet)'; } catch (_) { return '?'; } })()),
       'ua: ' + (navigator.userAgent.match(/OS [\d_]+|Version\/[\d.]+/g) || []).join(' ')
     ];
@@ -3440,6 +3449,7 @@
   function setFeedMode(mode) {
     try { localStorage.setItem('sp_feed_mode', mode === 'shuffle' ? 'shuffle' : 'ranked'); } catch (_) {}
     homeResume = null;
+    try { localStorage.removeItem('sp_home_last'); } catch (_) {}   // a new order starts from the top
     spToast('Home feed: ' + (mode === 'shuffle' ? 'Shuffle' : 'Ranked'));
     if (isMobilePlayer() && activeMobileTab === 'home' && playerOpen && !playerReturnTab) { closePlayer(); openPlayer(); }
   }
@@ -3476,6 +3486,7 @@
     showMobilePlayerLoading();
     if (homeResume && !playerStartId) {   // coming back to Home: same list, same video
       const r = homeResume; homeResume = null;
+      spTrace('home: resumed at ' + r.pos);
       playerVideoList = r.list; homeFeedPool = r.pool; playerColumnOffsets = [r.pos];
       renderMobilePlayerContent();
       return;
@@ -3483,6 +3494,15 @@
     homeResume = null;
     playerVideoList = await buildHomeList();
     if (!playerOpen) { hideMobilePlayerView(); return; }
+    // The page was reloaded a moment ago (the phone can discard a page that used a lot of memory): reopen on the video
+    // that was showing instead of a brand new order
+    if (!playerStartId) {
+      try {
+        const last = JSON.parse(localStorage.getItem('sp_home_last') || 'null');
+        if (last && last.id && Date.now() - last.at < 10 * 60 * 1000) { playerStartId = last.id; spTrace('home: reopened on the last video'); }
+        else spTrace('home: new list');
+      } catch (_) {}
+    }
     // If a specific video was requested (e.g. tapped from recents grid), put it first
     if (playerStartId) {
       const si = playerVideoList.findIndex(v => v.id === playerStartId);
@@ -4077,6 +4097,7 @@
       coverWindow(idx);
       visit = { id: renderList[idx].id, vid, t0: Date.now(), loops: 0 };
       playerColumnOffsets[0] = winStart + idx;
+      if (endless) { try { localStorage.setItem('sp_home_last', JSON.stringify({ id: renderList[idx].id, at: Date.now() })); } catch (_) {} }
       updateControls(renderList[idx], vid);
       vid._userPaused = false;
       vid.parentElement?.classList.remove('sp-paused');
@@ -4387,7 +4408,10 @@
 
         // Scroll to starting position NOW that slides have real heights
         if (startIdx > 0 && feed.children[startIdx]) {
-          feed.children[startIdx].scrollIntoView({ behavior: 'instant' });
+          const snap = feed.style.scrollSnapType;
+          feed.style.scrollSnapType = 'none';
+          feed.scrollTop = startIdx * h;   // every slide is exactly one screen tall
+          requestAnimationFrame(() => { feed.style.scrollSnapType = snap; });
         }
 
         // IntersectionObserver: play the centered slide, pause everything else.
