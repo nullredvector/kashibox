@@ -15,7 +15,8 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 ## Features
 
 ### Pages
-- **Stars** (the default page): star videos, put them into groups, give them levels, and filter by *All stars*, *All tagged*, *Untagged* or *Disappeared*.
+- **Stars** (the default page): star videos, put them into groups, give them levels, and filter by *All tagged*, *All stars*, *Super stars*, *Untagged* or *Disappeared*.
+- **Super stars:** press and hold any star button (about half a second) to turn it into a blue sparkle star. Super stars have their own category under *All stars*, and the account that posted one is highlighted and sorted to the top of the Following page. Tap a super star to remove it, hold it again to make it a normal star.
 - **Likes** and **Favorites:** your downloaded collections, with *Current* (what is still listed), *Disappeared* (downloaded but no longer listed) and *All*, plus search.
 - **Following:** the accounts you follow, with avatar, name, follower count and how many of their videos you have. Show only the accounts with videos, or everyone. Click an account to open its videos.
 - **Settings** (the gear right of the Player button; on a phone, the gear in the Library header): the profile link, a summary of your archive and a device info box. Settings are saved on the server, so every device shares them.

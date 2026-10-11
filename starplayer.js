@@ -323,18 +323,11 @@
     };
 
     const star = mk('thumb-star');
-    star._refresh = () => {
-      const on = Boolean(stars[videoId]);
-      star.textContent = on ? '★' : '☆';
-      star.title = on ? 'Remove from Stars' : 'Add to Stars';
-      star.classList.toggle('on', on);
-    };
+    star._refresh = () => paintStarBtn(star, videoId, true);
     star._refresh();
-    star.addEventListener('click', e => {
-      e.stopPropagation();
-      toggleStar(videoId, coverSrc, authorName, desc);
-      star._refresh();
-    });
+    starGesture(star,
+      () => { toggleStar(videoId, coverSrc, authorName, desc); star._refresh(); },
+      () => { toggleSuperStar(videoId, coverSrc, authorName, desc); star._refresh(); });
 
     const braces = makeBracesBtn('thumb-tool', videoId, 16);
 
@@ -534,6 +527,56 @@
   // TOGGLE STAR
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // ── Super stars ────────────────────────────────────────────────────────────
+  // A star can be upgraded to a super star (stars[id].super = true): shown as a blue sparkle star, collected in its own
+  // Stars category, and its creator is lifted to the top of the Following page. Long-press a star to flip it.
+  const SUPER_STAR_SVG = (size) =>
+    '<svg viewBox="0 0 24 24"' + (size ? ' width="' + size + '" height="' + size + '"' : '') + ' aria-hidden="true">' +
+    '<path fill="#4fc3f7" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
+    '<path fill="#e6f7ff" d="M20 .6l.8 2L22.8 3.4l-2 .8L20 6.2l-.8-2-2-.8 2-.8z"/>' +
+    '<path fill="#e6f7ff" d="M4.3 14.8l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z"/></svg>';
+  const isSuperStar = id => Boolean(stars[id] && stars[id].super);
+
+  // Tap and long-press on a star button: the tap does onTap, holding for about half a second does onHold
+  function starGesture(btn, onTap, onHold) {
+    let timer = null, held = false;
+    btn.addEventListener('pointerdown', () => {
+      held = false; clearTimeout(timer);
+      timer = setTimeout(() => { held = true; try { navigator.vibrate && navigator.vibrate(15); } catch (_) {} onHold(); }, 450);
+    });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => btn.addEventListener(t, () => clearTimeout(timer)));
+    btn.addEventListener('click', e => { e.stopPropagation(); if (held) { held = false; return; } onTap(e); });
+    btn.addEventListener('contextmenu', e => e.preventDefault());
+  }
+
+  function toggleSuperStar(videoId, coverSrc, authorName, desc) {
+    if (!stars[videoId]) toggleStar(videoId, coverSrc, authorName, desc);   // a super star is always a star too
+    const st = stars[videoId];
+    if (!st) return false;
+    if (st.super) delete st.super; else st.super = true;
+    saveStars();
+    afterStarChange();
+    return Boolean(st.super);
+  }
+
+  function afterStarChange() {
+    refreshToolButtons();
+    if (starsTabActive) renderStarsView();
+    if (listTabKind === 'following') renderListView();   // the highlighted accounts may have changed
+  }
+
+  // Show the right glyph and colour on a star button: plain (hollow/filled), gold when starred, blue sparkle when super
+  function paintStarBtn(btn, id, hollowWhenOff) {
+    const st = stars[id], sup = Boolean(st && st.super);
+    btn.classList.toggle('active', Boolean(st));
+    btn.classList.toggle('on', Boolean(st));
+    btn.classList.toggle('super', sup);
+    if (sup) { if (!btn._sparkle) { btn.innerHTML = SUPER_STAR_SVG(); btn._sparkle = true; } }
+    else { btn._sparkle = false; btn.textContent = st ? '★' : (hollowWhenOff ? '☆' : '★'); }
+    btn.title = sup ? 'Super star (tap to remove, hold to make it a normal star)'
+      : st ? 'Remove from Stars (hold for a super star)' : 'Add to Stars (hold for a super star)';
+  }
+
   function toggleStar(videoId, coverSrc, authorName, desc) {
     if (stars[videoId]) {
       delete stars[videoId];
@@ -546,7 +589,7 @@
       stars[videoId] = { id: videoId, coverSrc, authorName: authorName || '', desc: desc || '' };
     }
     saveStars();
-    if (starsTabActive) renderStarsView();
+    afterStarChange();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -735,13 +778,11 @@
     rightCenter.className = 'overlay-right-center';
 
     const starBtn = document.createElement('button');
-    starBtn.className = 'overlay-ctrl-btn overlay-star-btn' + (stars[item.id] ? ' active' : '');
-    starBtn.innerHTML = '★';
-    starBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      toggleStar(item.id, item.coverSrc, authorName, desc);
-      starBtn.classList.toggle('active', Boolean(stars[item.id]));
-    });
+    starBtn.className = 'overlay-ctrl-btn overlay-star-btn';
+    paintStarBtn(starBtn, item.id, false);
+    starGesture(starBtn,
+      () => { toggleStar(item.id, item.coverSrc, authorName, desc); paintStarBtn(starBtn, item.id, false); },
+      () => { toggleSuperStar(item.id, item.coverSrc, authorName, desc); paintStarBtn(starBtn, item.id, false); });
     rightCenter.appendChild(starBtn);
     rightCenter.appendChild(makeBracesBtn('overlay-ctrl-btn overlay-braces-btn', item.id, 24));
 
@@ -1140,6 +1181,18 @@
     return map;
   }
 
+  // Accounts that have at least one super-starred video
+  function superAuthorIds() {
+    const d = _dbCache, out = new Set();
+    if (!d) return out;
+    Object.keys(stars).forEach(id => {
+      if (!stars[id].super) return;
+      const v = d.videos[id];
+      if (v) out.add(String(v.authorId));
+    });
+    return out;
+  }
+
   function followedAuthors() {
     const d = _dbCache;
     if (!d || !d.following) return [];
@@ -1147,9 +1200,10 @@
     const counts = followCounts();
     const ids = new Set((f.officialAuthorList || []).map(x => (x && typeof x === 'object') ? (x.id || x.authorId || x.uid) : x).filter(Boolean).map(String));
     Object.keys(f.authorItems || {}).forEach(id => ids.add(id));
+    const supers = superAuthorIds();
     return [...ids].map(id => {
       const a = d.authors[id] || {};
-      return { id, name: (a.uniqueIds && a.uniqueIds[0]) || '', nick: (a.nicknames && a.nicknames[0]) || '', followers: a.followerCount || 0, videos: counts.get(id) || 0 };
+      return { id, name: (a.uniqueIds && a.uniqueIds[0]) || '', nick: (a.nicknames && a.nicknames[0]) || '', followers: a.followerCount || 0, videos: counts.get(id) || 0, super: supers.has(id) };
     });
   }
 
@@ -1279,9 +1333,9 @@
       if (!_dbCache) { grid.textContent = 'Loading…'; return; }
       if (following) {
         let list = followedAuthors();
-        if (listScope.following === 'with') list = list.filter(a => a.videos > 0);
+        if (listScope.following === 'with') list = list.filter(a => a.videos > 0 || a.super);
         if (q) list = list.filter(a => (a.name + ' ' + a.nick).toLowerCase().includes(q));
-        list.sort((a, b) => (b.videos - a.videos) || (b.followers - a.followers) || a.name.localeCompare(b.name));
+        list.sort((a, b) => (Number(b.super) - Number(a.super)) || (b.videos - a.videos) || (b.followers - a.followers) || a.name.localeCompare(b.name));
         count.textContent = `${list.length} account${list.length !== 1 ? 's' : ''}`;
         if (!list.length) grid.appendChild(Object.assign(document.createElement('div'), { className: 'author-empty', textContent: 'Nothing here.' }));
         fillGrid(grid, list, a => buildFollowCard(a));
@@ -1349,7 +1403,15 @@
     stats.className = 'follow-stats';
     stats.textContent = `${a.videos} video${a.videos !== 1 ? 's' : ''}` + (a.followers ? ` · ${fmtCount(a.followers)} followers` : '');
     card.append(av, name, sub, stats);
-    card.classList.toggle('no-videos', !a.videos);
+    card.classList.toggle('no-videos', !a.videos && !a.super);
+    if (a.super) {
+      card.classList.add('is-super');
+      const badge = document.createElement('span');
+      badge.className = 'follow-super';
+      badge.title = 'Has a super star';
+      badge.innerHTML = SUPER_STAR_SVG(22);
+      card.appendChild(badge);
+    }
     card.addEventListener('click', () => showAuthorTab(a.id, label));
     return card;
   }
@@ -1527,7 +1589,7 @@
 
   let starsTabActive = false;
   let starsViewEl    = null;
-  let activeView       = '__tagged__'; // null (All Stars / selected groups) | '__tagged__' | '__lvl_groups__' | '__ungrouped__' (Untagged) | '__disappeared__'
+  let activeView       = '__tagged__'; // null (All Stars / selected groups) | '__tagged__' | '__super__' | '__lvl_groups__' | '__ungrouped__' (Untagged) | '__disappeared__'
   let activeGroupIds   = new Set();   // empty = all stars; non-empty = union of selected groups
   let activeLvl        = new Set();   // empty = no filter; set of numbers = multi-select
   let mobileStarsLvlOpen = false;     // mobile: whether inline lvl strip is visible
@@ -1611,6 +1673,7 @@
       else if (id === '__ungrouped__')  isActive = activeView === '__ungrouped__';
       else if (id === '__tagged__')     isActive = activeView === '__tagged__';
       else if (id === '__disappeared__') isActive = activeView === '__disappeared__';
+      else if (id === '__super__')      isActive = activeView === '__super__';
       else if (id === 'all')            isActive = activeView === null && activeGroupIds.size === 0;
       else                              isActive = activeGroupIds.has(id);
       const item = document.createElement('div');
@@ -1664,6 +1727,13 @@
     const allItem = makeSidebarItem('all', 'All Stars', Object.keys(stars).length);
     allItem.addEventListener('click', () => { activeView = null; activeGroupIds.clear(); renderStarsView(); });
     sidebar.appendChild(allItem);
+
+    // ── Super stars (a star you long-pressed) ───────────────────────────────
+    const superCount = Object.values(stars).filter(x => x.super).length;
+    const superItem = makeSidebarItem('__super__', '\u2726 Super stars', superCount);
+    superItem.classList.add('stars-super-item');
+    superItem.addEventListener('click', () => { activeView = '__super__'; activeGroupIds.clear(); renderStarsView(); });
+    sidebar.appendChild(superItem);
 
     // ── Untagged ──────────────────────────────────────────────────────────────
     const groupedIds = new Set(groups.flatMap(g => g.videoIds));
@@ -1800,6 +1870,11 @@
     const isAll = activeView === null && activeGroupIds.size === 0 && activeLvl.size === 0 && !mobileStarsLvlOpen;
     mobileFilters.appendChild(makeFilterBtn('stars-filter-all', '★', 'All Stars', isAll, () => {
       activeView = null; activeGroupIds.clear(); activeLvl.clear(); mobileStarsLvlOpen = false; mobileStarsGroupsOpen = false; renderStarsView();
+    }));
+
+    // ✦ Super stars
+    mobileFilters.appendChild(makeFilterBtn('stars-filter-super', SUPER_STAR_SVG(18), 'Super stars', activeView === '__super__', () => {
+      activeView = '__super__'; activeGroupIds.clear(); activeLvl.clear(); mobileStarsLvlOpen = false; mobileStarsGroupsOpen = false; renderStarsView();
     }));
 
     // 👍 Liked group
@@ -1994,6 +2069,25 @@
           return buildStarsGridCard(star, authorName, desc, null);
         });
       }
+    } else if (activeView === '__super__') {
+      // ── Super stars: every starred video that was long-pressed into a super star ─────────
+      const baseVideos = Object.entries(stars).filter(([, x]) => x.super).map(([key, x]) => ({ ...x, id: key }));
+      const videosToShow = sortVideos(activeLvl.size > 0 ? baseVideos.filter(x => activeLvl.has(levels[x.id])) : baseVideos, 'stars');
+      const countText = `${videosToShow.length} video${videosToShow.length !== 1 ? 's' : ''}`;
+      mainHeader.innerHTML = `<span class="stars-main-title">Super stars</span><span class="stars-main-count">${countText}</span>`;
+      mobileTitle.innerHTML = `<span class="stars-main-title">Super stars</span><span class="stars-main-count">${countText}</span>`;
+      setStarsContext(videosToShow);
+      if (!videosToShow.length) {
+        const empty = document.createElement('div');
+        empty.id = 'stars-empty';
+        empty.textContent = 'No super stars yet. Press and hold a star to make one.';
+        grid.appendChild(empty);
+      } else {
+        fillGrid(grid, videosToShow, star => {
+          const info = getVideoInfo(star.id);
+          return buildStarsGridCard(star, info.authorName || star.authorName || '', info.desc || star.desc || '', null);
+        });
+      }
     } else if (activeView === '__disappeared__') {
       // ── Disappeared: every archived video removed from the official lists (tagging does not hide it) ──
       const baseVideos = disappearedIds()
@@ -2182,13 +2276,13 @@
     const isGlobalView = activeView === null && activeGroupIds.size === 0;
     const isInGroup    = activeView === null && activeGroupIds.size > 0;
     rmBtn.title = onRemoveOverride ? 'Remove level'
-      : (isGlobalView || activeView === '__ungrouped__') ? 'Remove from Stars'
+      : (isGlobalView || activeView === '__ungrouped__' || activeView === '__super__') ? 'Remove from Stars'
       : 'Remove from group';
     rmBtn.textContent = '✕';
     rmBtn.addEventListener('click', e => {
       e.stopPropagation();
       if (onRemoveOverride) { onRemoveOverride(); return; }
-      if (isGlobalView || activeView === '__ungrouped__') {
+      if (isGlobalView || activeView === '__ungrouped__' || activeView === '__super__') {
         toggleStar(star.id, star.coverSrc);
       } else if (isInGroup) {
         activeGroupIds.forEach(gid => {
@@ -3737,13 +3831,14 @@
     const starBtn = document.createElement('button');
     starBtn.className = 'player-ctrl-btn player-star-btn';
     starBtn.innerHTML = '★';
-    starBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      if (!currentItem) return;
-      toggleStar(currentItem.id, currentItem.coverSrc);
-      starBtn.classList.toggle('active', Boolean(stars[currentItem.id]));
-      starBtn.title = stars[currentItem.id] ? 'Remove from Stars' : 'Add to Stars';
-    });
+    starGesture(starBtn,
+      () => { if (!currentItem) return; toggleStar(currentItem.id, currentItem.coverSrc); paintStarBtn(starBtn, currentItem.id, false); },
+      () => {
+        if (!currentItem) return;
+        const now = toggleSuperStar(currentItem.id, currentItem.coverSrc);
+        paintStarBtn(starBtn, currentItem.id, false);
+        spToast(now ? 'Super star' : 'Normal star');
+      });
 
     const bracesBtn = makeBracesBtn('player-ctrl-btn player-braces-btn', null, 24);
 
@@ -3850,8 +3945,7 @@
       thumbUpBtn.classList.toggle('active', inQuickGroup(item.id, 'liked'));
       thumbDownBtn.classList.toggle('active', inQuickGroup(item.id, 'disliked'));
 
-      starBtn.classList.toggle('active', Boolean(stars[item.id]));
-      starBtn.title = stars[item.id] ? 'Remove from Stars' : 'Add to Stars';
+      paintStarBtn(starBtn, item.id, false);
 
       bracesBtn.dataset.vid = item.id;
       bracesBtn._refresh();
@@ -4314,6 +4408,7 @@ body:hover .ctl,.ctl.pinned{opacity:1}
 .b{background:rgba(0,0,0,.5);border:none;border-radius:50%;color:#ddd;width:40px;height:40px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s;pointer-events:auto;flex-shrink:0}
 .b:hover{background:rgba(0,0,0,.85)}
 .b.on{color:gold}
+.b.sup{color:#4fc3f7}
 .bbr.on{color:#4fc3f7}
 .blvl{font-size:12px;font-weight:700;letter-spacing:-.5px}
 .bgrp svg{pointer-events:none}
@@ -4516,12 +4611,23 @@ function render(){
 
   // ★ Star
   const sb=document.createElement('button');
-  sb.className='b'+(ls()[item.id]?' on':''); sb.innerHTML='★'; sb.title='Star';
+  const SSVG='<svg viewBox="0 0 24 24" width="24" height="24"><path fill="#4fc3f7" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/><path fill="#e6f7ff" d="M20 .6l.8 2L22.8 3.4l-2 .8L20 6.2l-.8-2-2-.8 2-.8z"/><path fill="#e6f7ff" d="M4.3 14.8l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z"/></svg>';
+  const paintStar=()=>{const st=ls()[item.id]; sb.className='b'+(st?' on':'')+(st&&st.super?' sup':''); if(st&&st.super)sb.innerHTML=SSVG; else sb.textContent='★'; sb.title=st&&st.super?'Super star (hold to make it a normal star)':'Star (hold for a super star)';};
+  const addStar=s=>{s[item.id]={id:item.id,coverSrc:item.coverSrc,authorName:item.authorName||'',desc:item.desc||''};};
+  paintStar();
+  let starHold=null, starHeld=false;
+  sb.addEventListener('pointerdown',()=>{starHeld=false;clearTimeout(starHold);starHold=setTimeout(()=>{
+    starHeld=true; const s=ls(); if(!s[item.id])addStar(s);
+    if(s[item.id].super)delete s[item.id].super; else s[item.id].super=true;
+    ss(s); paintStar();
+  },450);});
+  ['pointerup','pointerleave','pointercancel'].forEach(t=>sb.addEventListener(t,()=>clearTimeout(starHold)));
+  sb.addEventListener('contextmenu',e=>e.preventDefault());
   sb.addEventListener('click',()=>{
+    if(starHeld){starHeld=false;return;}
     const s=ls();
-    if(s[item.id])delete s[item.id];
-    else s[item.id]={id:item.id,coverSrc:item.coverSrc,authorName:item.authorName||'',desc:item.desc||''};
-    ss(s); sb.classList.toggle('on',Boolean(ls()[item.id]));
+    if(s[item.id])delete s[item.id]; else addStar(s);
+    ss(s); paintStar();
   });
   rc.appendChild(sb);
 
@@ -6595,6 +6701,17 @@ render();
       .stars-grid-cover:hover .thumb-tool, .thumb-tool.on, .thumb-tool.braces-on { opacity: 1; }
       .thumb-tool:hover { background: rgba(0,0,0,.9); color: #fff; }
       .thumb-star.on { color: gold; }
+      .thumb-star.super, .overlay-star-btn.super, .player-star-btn.super { color: #4fc3f7; }
+      .thumb-star.super svg, .overlay-star-btn.super svg, .player-star-btn.super svg { filter: drop-shadow(0 0 4px rgba(79,195,247,.7)); }
+      .overlay-star-btn.super svg { width: 24px; height: 24px; }
+      .thumb-star, .overlay-star-btn, .player-star-btn { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+      .stars-super-item .stars-group-name { color: #8fd8ff; }
+      .follow-card { position: relative; }
+      .follow-card.is-super { background: #2e3a43; box-shadow: 0 0 0 2px #4fc3f7, 0 0 16px rgba(79,195,247,.35); }
+      .follow-card.is-super:hover { background: #34444f; }
+      .follow-super { position: absolute; top: 8px; right: 8px; line-height: 0; filter: drop-shadow(0 0 4px rgba(79,195,247,.7)); }
+      .follow-card.is-super .follow-name { color: #bfe9ff; }
+      .stars-filter-super svg { width: 18px; height: 18px; }
       .thumb-lvl { font-size: calc(var(--tool, 28px) * 0.36); font-weight: 700; letter-spacing: -.5px; }
       .thumb-lvl.on { color: #fe2c55; }
       .thumb-tool.braces-on { color: #4fc3f7; }
