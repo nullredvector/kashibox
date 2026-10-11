@@ -6505,12 +6505,16 @@ render();
     if (isMobilePlayer()) {
       setupPhoneChrome();
       createMobileNav();
+      injectCastNavBtn();
       setupMobileSwipe();
       // Show loading overlay immediately, then open player
       showDefaultStarsView();
     } else {
       const nav = document.querySelector('nav');
       if (nav) new MutationObserver(injectNavTabs).observe(nav, { childList: true });
+      new MutationObserver(() => {
+        if (castSession) document.querySelectorAll('div.cover:not([data-cast-wired])').forEach(wireCastOverlay);
+      }).observe(root, { childList: true, subtree: true });
       injectNavTabs();
       ensureArchiveDb();
       showDefaultStarsView();
@@ -6539,6 +6543,119 @@ render();
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // GOOGLE CAST — SENDER
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ← Replace with your App ID from cast.google.com/publish after registering
+  // Receiver URL to submit: https://kashibox.fexel.net/cast
+  const CAST_APP_ID  = 'XXXXXXXX';
+  const CAST_NS      = 'urn:x-cast:net.fexel.kashibox';
+  const CAST_SDK_URL = 'https://www.gstatic.com/cast/sdk/libs/caf_sender/v3/cast_framework.js';
+
+  let castReady   = false;
+  let castSession = null;
+
+  // Must be set before the SDK script loads
+  window['__onGCastApiAvailable'] = function(isAvailable) {
+    if (!isAvailable) return;
+    castReady = true;
+    cast.framework.CastContext.getInstance().setOptions({
+      receiverApplicationId: CAST_APP_ID,
+      autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
+    });
+    const ctx = cast.framework.CastContext.getInstance();
+    ctx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED,    onCastStateChange);
+    ctx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, onCastStateChange);
+    onCastStateChange();
+  };
+
+  function onCastStateChange() {
+    const ctx     = cast.framework.CastContext.getInstance();
+    const state   = ctx.getCastState();
+    const session = ctx.getCurrentSession();
+    castSession = session || null;
+
+    const available = state !== cast.framework.CastState.NO_DEVICES_AVAILABLE;
+    const connected = state === cast.framework.CastState.CONNECTED;
+
+    const btn = document.getElementById('sp-cast-nav-btn');
+    if (btn) {
+      btn.style.display = available ? '' : 'none';
+      btn.classList.toggle('sp-cast-on', connected);
+    }
+
+    refreshCastOverlays();
+  }
+
+  function initCastSDK() {
+    if (document.querySelector('script[src="' + CAST_SDK_URL + '"]')) return;
+    const s = document.createElement('script');
+    s.src = CAST_SDK_URL;
+    document.head.appendChild(s);
+  }
+
+  function castVideo(coverSrc) {
+    if (!castSession) return;
+    const videoUrl = window.location.origin + '/' + getVideoPath(coverSrc);
+    const coverUrl = window.location.origin + '/' + coverSrc;
+    castSession.sendMessage(CAST_NS, { action: 'add', videoUrl, coverUrl }).catch(() => {});
+  }
+
+  const CAST_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-1 8H10c-.55 0-1 .45-1 1v7c0 .55.45 1 1 1h10c.55 0 1-.45 1-1v-7c0-.55-.45-1-1-1zm-1 7h-8v-5h8v5zM1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2C12 14.92 7.08 10 1 10z"/></svg>';
+
+  function injectCastNavBtn() {
+    const nav = document.getElementById('sp-mobile-nav');
+    if (!nav || document.getElementById('sp-cast-nav-btn')) return;
+
+    const btn = document.createElement('button');
+    btn.id        = 'sp-cast-nav-btn';
+    btn.className = 'sp-nav-btn';
+    btn.title     = 'Cast to TV';
+    btn.innerHTML = CAST_SVG + '<span>Cast</span>';
+    btn.style.display = 'none'; // hidden until SDK reports devices nearby
+    btn.addEventListener('click', () => {
+      if (!castReady) return;
+      if (castSession) {
+        cast.framework.CastContext.getInstance().endCurrentSession(true);
+      } else {
+        cast.framework.CastContext.getInstance().requestSession().catch(() => {});
+      }
+    });
+
+    nav.appendChild(btn);
+    initCastSDK();
+  }
+
+  function refreshCastOverlays() {
+    // Wire any unwired covers; update visibility of existing overlays
+    document.querySelectorAll('div.cover').forEach(coverDiv => {
+      if (!coverDiv.dataset.castWired) wireCastOverlay(coverDiv);
+      const ov = coverDiv.querySelector('.sp-cast-ov');
+      if (ov) ov.style.display = castSession ? '' : 'none';
+    });
+  }
+
+  function wireCastOverlay(coverDiv) {
+    const img = coverDiv.querySelector('img.thumbnail');
+    const src = img && img.getAttribute('src');
+    if (!getVideoIdFromSrc(src)) return;
+    coverDiv.dataset.castWired = '1';
+
+    const btn = document.createElement('button');
+    btn.className    = 'sp-cast-ov';
+    btn.title        = 'Cast to TV';
+    btn.innerHTML    = CAST_SVG;
+    btn.style.display = castSession ? '' : 'none';
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      castVideo(img.getAttribute('src'));
+      btn.classList.add('sp-cast-ov-sent');
+      setTimeout(() => btn.classList.remove('sp-cast-ov-sent'), 500);
+    });
+    coverDiv.appendChild(btn);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // STYLES
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -6546,6 +6663,24 @@ render();
     const s = document.createElement('style');
     s.textContent = `
 
+
+      /* ── Cast button in mobile nav ── */
+      #sp-cast-nav-btn svg { width: 22px; height: 22px; display: block; }
+      #sp-cast-nav-btn.sp-cast-on { color: #4dd0e1; }
+
+      /* ── Cast overlay on video cards ── */
+      .sp-cast-ov {
+        position: absolute; bottom: 6px; left: 6px;
+        width: 30px; height: 30px;
+        background: rgba(0,0,0,.55); border: none; border-radius: 5px;
+        color: #fff; cursor: pointer; padding: 4px;
+        display: flex; align-items: center; justify-content: center;
+        z-index: 5; transition: background .15s, transform .1s;
+      }
+      .sp-cast-ov svg { width: 100%; height: 100%; display: block; }
+      .sp-cast-ov:active, .sp-cast-ov.sp-cast-ov-sent {
+        background: rgba(77,208,225,.7); transform: scale(0.88);
+      }
 
       /* ── Braces tag buttons ── */
       .braces-btn svg { display: block; pointer-events: none; }
