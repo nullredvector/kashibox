@@ -6548,7 +6548,7 @@ render();
 
   // ← Replace with your App ID from cast.google.com/publish after registering
   // Receiver URL to submit: https://kashibox.fexel.net/cast
-  const CAST_APP_ID  = 'XXXXXXXX';
+  const CAST_APP_ID  = '5B3E2EFF';
   const CAST_NS      = 'urn:x-cast:net.fexel.kashibox';
   const CAST_SDK_URL = 'https://www.gstatic.com/cast/sdk/libs/caf_sender/v3/cast_framework.js';
 
