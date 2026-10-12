@@ -6562,7 +6562,8 @@ render();
   (function() {
     const d = document.createElement('div');
     d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(0,0,0,.8);color:#fff;font-size:13px;padding:6px 10px;text-align:center';
-    d.textContent = 'Cap:' + !!(window.Capacitor) + ' Plugin:' + isCap;
+    const plugins = window.Capacitor ? Object.keys(window.Capacitor.Plugins || {}).join(',') || '(none)' : 'n/a';
+    d.textContent = 'Cap:' + !!(window.Capacitor) + ' Plugin:' + isCap + ' Keys:' + plugins;
     document.body ? document.body.appendChild(d) : document.addEventListener('DOMContentLoaded', () => document.body.appendChild(d));
     setTimeout(() => d.remove(), 8000);
   })();
