@@ -31,8 +31,9 @@ const ICONS = {
 };
 
 // kashibox's own page (shell.html) and its script, both served from the image rather than from the archive folder
-const SHELL_FILE  = path.join(__dirname, 'shell.html');
-const SCRIPT_FILE = path.join(__dirname, 'starplayer.js');
+const SHELL_FILE    = path.join(__dirname, 'shell.html');
+const SCRIPT_FILE   = path.join(__dirname, 'starplayer.js');
+const CAST_RCV_FILE = path.join(__dirname, 'cast-receiver.html');
 
 http.createServer((req, res) => {
   const pathname = url.parse(req.url).pathname;
@@ -286,6 +287,15 @@ http.createServer((req, res) => {
   if (pathname === '/' || pathname === '/index.html' || pathname === '/shell') {
     fs.readFile(SHELL_FILE, (err, html) => {
       if (err) { res.writeHead(500); res.end('shell.html missing'); return; }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+      res.end(html);
+    });
+    return;
+  }
+
+  if (pathname === '/cast') {
+    fs.readFile(CAST_RCV_FILE, (err, html) => {
+      if (err) { res.writeHead(404); res.end('cast-receiver.html missing'); return; }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
       res.end(html);
     });
