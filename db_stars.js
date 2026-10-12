@@ -156,8 +156,11 @@ function loadFeedback() {
 function loadAutotag(tag) {
   if (typeof tag !== 'string' || !TAG_RE.test(tag)) return { error: 'bad tag' };
   const sugg = readJson(AUTOTAG_FILE);
-  const weak = k => !!(sugg && sugg._meta && sugg._meta.metrics && sugg._meta.metrics[k] && sugg._meta.metrics[k].gate === 'weak');
-  const tags = sugg ? Object.keys(sugg).filter(k => k[0] !== '_' && Array.isArray(sugg[k]) && !weak(k)) : [];
+  const metrics = k => (sugg && sugg._meta && sugg._meta.metrics && sugg._meta.metrics[k]) || {};
+  const weak = k => metrics(k).gate === 'weak';
+  // A weak tag is listed only if it has a short low-confidence review list; hopeless ones are hidden
+  const tags = sugg ? Object.keys(sugg).filter(k => k[0] !== '_' && Array.isArray(sugg[k]) && (!weak(k) || sugg[k].length > 0 || metrics(k).review_only === true)) : [];
+  const lowConfidenceTags = tags.filter(weak);
   const fb = loadFeedback()[tag] || { accepted: [], rejected: [], unsure: [] };
   const decided = new Set([...fb.accepted, ...fb.rejected, ...fb.unsure]);
   const list = (sugg && Array.isArray(sugg[tag])) ? sugg[tag] : [];
@@ -167,7 +170,7 @@ function loadAutotag(tag) {
   const score = new Map(list.map(x => [x && x.id, x && Number(x.score) || 0]));
   const withScore = ids => ids.map(id => ({ id, score: score.get(id) ?? null }));
   return {
-    available: !!sugg, tags, tag, pending,
+    available: !!sugg, tags, lowConfidenceTags, lowConfidence: weak(tag), tag, pending,
     accepted: withScore(fb.accepted), rejected: withScore(fb.rejected), unsure: withScore(fb.unsure),
     generated: sugg && sugg._meta ? sugg._meta.generated || null : null,
   };
@@ -311,6 +314,7 @@ function framesConfig() {
   return {
     mode: ['off', 'trial', 'full'].includes(c.mode) ? c.mode : 'off',
     mouth: c.mouth === true,
+    text: c.text !== false,
     budget_min: Number.isInteger(c.budget_min) && c.budget_min >= 10 && c.budget_min <= 600 ? c.budget_min : 120,
   };
 }
@@ -337,9 +341,10 @@ function framesStatus(st) {
 
 function saveFramesConfig(d) {
   if (!d || !['off', 'trial', 'full'].includes(d.mode) || typeof d.mouth !== 'boolean') return { code: 400, error: 'bad settings' };
+  if (d.text !== undefined && typeof d.text !== 'boolean') return { code: 400, error: 'bad settings' };
   const b = d.budget_min === undefined ? 120 : d.budget_min;
   if (!Number.isInteger(b) || b < 10 || b > 600) return { code: 400, error: 'bad budget' };
-  try { writeOwnerOnly(FRAMES_FILE, { mode: d.mode, mouth: d.mouth, budget_min: b }); } catch (_) { return { code: 500, error: 'could not save' }; }
+  try { writeOwnerOnly(FRAMES_FILE, { mode: d.mode, mouth: d.mouth, text: d.text !== false, budget_min: b }); } catch (_) { return { code: 500, error: 'could not save' }; }
   return { code: 200, ok: true };
 }
 
