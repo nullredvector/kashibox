@@ -9,6 +9,7 @@ COPY db_stars.js   ./db_stars.js
 COPY entrypoint.sh ./entrypoint.sh
 COPY assets        ./assets
 COPY shell.html    ./shell.html
+COPY cast-receiver.html ./cast-receiver.html
 
 RUN chmod +x /app/entrypoint.sh
 
