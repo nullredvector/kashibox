@@ -6568,11 +6568,11 @@ render();
   // DEBUG: show Capacitor status on screen — remove once Cast is working
   (function() {
     const d = document.createElement('div');
-    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(0,0,0,.8);color:#fff;font-size:13px;padding:6px 10px;text-align:center';
+    d.style.cssText = 'position:fixed;top:60px;left:0;right:0;z-index:99999;background:rgba(0,0,0,.85);color:#fff;font-size:13px;padding:6px 10px;text-align:center';
     const plugins = window.Capacitor ? (window.Capacitor.PluginHeaders || []).map(h => h.name).join(',') || '(none)' : 'n/a';
     d.textContent = 'Cap:' + !!(window.Capacitor) + ' Plugin:' + isCap + ' Keys:' + plugins;
     document.body ? document.body.appendChild(d) : document.addEventListener('DOMContentLoaded', () => document.body.appendChild(d));
-    setTimeout(() => d.remove(), 8000);
+    setTimeout(() => d.remove(), 20000);
   })();
 
   function initCapCast() {
