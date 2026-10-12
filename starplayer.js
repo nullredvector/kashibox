@@ -6556,20 +6556,28 @@ render();
   let castSession = null;
 
   // True when running inside the Kashibox iOS app (Capacitor native bridge)
-  const isCap = !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.KashiboxCast);
+  const capCast = (function() {
+    const C = window.Capacitor;
+    if (!C) return null;
+    const listed = (C.PluginHeaders || []).some(h => h.name === 'KashiboxCast');
+    if (listed && C.registerPlugin) return C.registerPlugin('KashiboxCast');
+    return (C.Plugins && C.Plugins.KashiboxCast) || null;
+  })();
+  const isCap = !!capCast;
 
   // DEBUG: show Capacitor status on screen — remove once Cast is working
   (function() {
     const d = document.createElement('div');
     d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(0,0,0,.8);color:#fff;font-size:13px;padding:6px 10px;text-align:center';
-    d.textContent = 'Cap:' + !!(window.Capacitor) + ' Plugin:' + isCap;
+    const plugins = window.Capacitor ? (window.Capacitor.PluginHeaders || []).map(h => h.name).join(',') || '(none)' : 'n/a';
+    d.textContent = 'Cap:' + !!(window.Capacitor) + ' Plugin:' + isCap + ' Keys:' + plugins;
     document.body ? document.body.appendChild(d) : document.addEventListener('DOMContentLoaded', () => document.body.appendChild(d));
     setTimeout(() => d.remove(), 8000);
   })();
 
   function initCapCast() {
     if (!isCap) return;
-    const Plugin = window.Capacitor.Plugins.KashiboxCast;
+    const Plugin = capCast;
     const applyState = ({state}) => {
       const connected = state === 'connected';
       const available = state !== 'noDevicesAvailable';
@@ -6630,7 +6638,7 @@ render();
     const videoUrl = window.location.origin + '/' + getVideoPath(coverSrc);
     const coverUrl = window.location.origin + '/' + coverSrc;
     if (isCap) {
-      window.Capacitor.Plugins.KashiboxCast.sendMessage({ data: { action: 'add', videoUrl, coverUrl } }).catch(() => {});
+      capCast.sendMessage({ data: { action: 'add', videoUrl, coverUrl } }).catch(() => {});
     } else {
       castSession.sendMessage(CAST_NS, { action: 'add', videoUrl, coverUrl }).catch(() => {});
     }
@@ -6651,8 +6659,8 @@ render();
     btn.addEventListener('click', () => {
       if (!castReady) return;
       if (isCap) {
-        if (castSession) window.Capacitor.Plugins.KashiboxCast.endSession().catch(() => {});
-        else             window.Capacitor.Plugins.KashiboxCast.requestSession().catch(() => {});
+        if (castSession) capCast.endSession().catch(() => {});
+        else             capCast.requestSession().catch(() => {});
       } else {
         if (castSession) cast.framework.CastContext.getInstance().endCurrentSession(true);
         else             cast.framework.CastContext.getInstance().requestSession().catch(() => {});
