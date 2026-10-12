@@ -5505,6 +5505,9 @@ render();
   let autotagViewEl    = null;
   let atTag            = 'braces';
   let atMode           = 'pending';   // 'pending' | 'accepted' | 'rejected'
+  let atViewMode       = (() => { try { return localStorage.getItem('sp_at_view') === 'grid' ? 'grid' : 'cards'; } catch (_) { return 'cards'; } })();   // phones: swipe cards or the grid
+  let atMuted          = (() => { try { return localStorage.getItem('sp_at_muted') !== '0'; } catch (_) { return true; } })();
+  let atSwipeCleanup   = null;        // tears down the mounted card stack (keyboard + video listeners)
   let atData           = null;        // last /api/autotag response
   let atError          = '';
   let atBusy           = new Set();
@@ -5678,9 +5681,191 @@ render();
     return card;
   }
 
+  // ── Phone review: swipeable full-screen cards (like the Home feed) ──
+  // Swipe right = accept, left = reject, up = not sure. The same three buttons stay overlaid at the bottom. The current
+  // card autoplays (muted until you unmute). Decisions go through atDecide, exactly like the grid buttons.
+  function buildSwipeStack(list) {
+    const queue = list.slice();
+    const root = document.createElement('div');
+    root.id = 'at-swipe';
+    const stack = document.createElement('div'); stack.className = 'at-sw-stack';
+    const count = document.createElement('div'); count.className = 'at-sw-count';
+    const muteBtn = document.createElement('button'); muteBtn.className = 'at-sw-mute'; muteBtn.title = 'Sound on/off';
+    const toast = document.createElement('div'); toast.className = 'at-sw-toast';
+    const btns = document.createElement('div'); btns.className = 'at-sw-btns';
+    let cur = null, busy = false, undoItem = null, toastTimer = null, lastDecide = Promise.resolve();
+
+    const dispose = card => {
+      if (!card) return;
+      const v = card.querySelector('video');
+      if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+      card.remove();
+    };
+    const setMuteIcon = () => { muteBtn.innerHTML = muteIcon(atMuted); };
+    setMuteIcon();
+    muteBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      atMuted = !atMuted;
+      try { localStorage.setItem('sp_at_muted', atMuted ? '1' : '0'); } catch (_) {}
+      const v = cur && cur.querySelector('video'); if (v) { v.muted = atMuted; v.play().catch(() => {}); }
+      setMuteIcon();
+    });
+    const say = (text, undo) => {
+      clearTimeout(toastTimer);
+      toast.textContent = text;
+      if (undo) { const u = document.createElement('button'); u.textContent = 'Undo'; u.addEventListener('click', undo); toast.appendChild(u); }
+      toast.classList.add('on');
+      toastTimer = setTimeout(() => toast.classList.remove('on'), 4500);
+    };
+
+    function makeCard(item, live) {
+      const id = item.id, coverSrc = coverSrcFor(id), info = getVideoInfo(id);
+      const card = document.createElement('div');
+      card.className = 'at-sw-card'; card.dataset.id = id;
+      const img = document.createElement('img'); img.className = 'at-sw-img'; img.src = coverSrc; img.alt = '';
+      img.onerror = () => { img.style.display = 'none'; };
+      card.appendChild(img);
+      if (live) {
+        const v = document.createElement('video');
+        v.className = 'at-sw-video'; v.muted = atMuted; v.loop = true; v.playsInline = true; v.autoplay = true; v.preload = 'auto';
+        v.setAttribute('playsinline', ''); v.poster = coverSrc; v.src = getVideoPath(coverSrc);
+        v.addEventListener('error', () => { v.style.display = 'none'; });
+        card.appendChild(v);
+        v.play().catch(() => {});
+      }
+      [['acc', 'ACCEPT'], ['rej', 'REJECT'], ['uns', 'NOT SURE']].forEach(([c, t]) => {
+        const st = document.createElement('div'); st.className = 'at-sw-stamp ' + c; st.textContent = t; card.appendChild(st);
+      });
+      const meta = document.createElement('div'); meta.className = 'at-sw-info';
+      const top = document.createElement('div');
+      if (info.authorName) { const u = document.createElement('span'); u.className = 'at-sw-user'; setAuthorLink(u, info.authorName); top.appendChild(u); }
+      if (item.score != null) { const sc = document.createElement('span'); sc.className = 'at-sw-score'; sc.textContent = item.score.toFixed(2); sc.title = 'Model score (higher = more like your tagged examples)'; top.appendChild(sc); }
+      meta.appendChild(top);
+      if (info.desc) { const cap = document.createElement('div'); cap.className = 'at-sw-cap'; cap.textContent = info.desc.length > 110 ? info.desc.slice(0, 110) + '…' : info.desc; meta.appendChild(cap); }
+      card.appendChild(meta);
+      return card;
+    }
+
+    function stamps(card, dx, dy, thrX, thrY) {
+      const o = (x) => String(Math.max(0, Math.min(1, x)));
+      card.querySelector('.acc').style.opacity = o(dx / thrX);
+      card.querySelector('.rej').style.opacity = o(-dx / thrX);
+      card.querySelector('.uns').style.opacity = Math.abs(dx) < thrX ? o(-dy / thrY) : '0';
+    }
+
+    function fly(decision) {
+      if (busy || !cur || !queue.length) return;
+      busy = true;
+      const W = root.clientWidth || 360, H = root.clientHeight || 600, card = cur;
+      card.style.transition = 'transform .24s ease-out, opacity .24s';
+      card.style.transform = decision === 'accepted' ? `translate(${W * 1.3}px, -40px) rotate(18deg)`
+        : decision === 'rejected' ? `translate(${-W * 1.3}px, -40px) rotate(-18deg)` : `translate(0, ${-H * 1.1}px)`;
+      card.style.opacity = '0';
+      stamps(card, decision === 'accepted' ? 1 : decision === 'rejected' ? -1 : 0, decision === 'unsure' ? -1 : 0, 1, 1);
+      setTimeout(() => advance(decision), 230);
+    }
+
+    function advance(decision) {
+      const item = queue.shift();
+      dispose(cur); cur = null;
+      undoItem = decision === 'accepted' ? null : item;
+      lastDecide = atDecide(item.id, decision, root);               // same path as the grid buttons: saves, then touches the group on accept
+      say(decision === 'accepted' ? 'Added to "' + atGroupName(atTag) + '"' : decision === 'rejected' ? 'Rejected' : 'Set aside (not sure)',
+          decision === 'accepted' ? null : async () => {
+            await lastDecide;
+            if (!undoItem || busy) return;
+            const it = undoItem; undoItem = null; busy = true;
+            try { await atSendFeedback(it.id, 'pending', true); atApplyLocal(it.id, 'pending'); queue.unshift(it); toast.classList.remove('on'); }
+            catch (_) { say('Could not undo'); }
+            busy = false; mount();
+          });
+      busy = false;
+      mount();
+    }
+
+    function attachGestures(card) {
+      let sx = 0, sy = 0, st = 0, dx = 0, dy = 0, dragging = false, moved = false;
+      const W = () => root.clientWidth || 360;
+      card.addEventListener('pointerdown', e => {
+        if (busy || e.target.closest('button, a, .at-sw-user')) return;
+        dragging = true; moved = false; dx = dy = 0; sx = e.clientX; sy = e.clientY; st = Date.now();
+        try { card.setPointerCapture(e.pointerId); } catch (_) {}
+        card.style.transition = 'none';
+      });
+      card.addEventListener('pointermove', e => {
+        if (!dragging) return;
+        dx = e.clientX - sx; dy = e.clientY - sy;
+        if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved = true;
+        card.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx / 18}deg)`;
+        stamps(card, dx, dy, Math.max(90, W() * 0.28), 110);
+      });
+      const end = () => {
+        if (!dragging) return;
+        dragging = false;
+        const dt = Math.max(1, Date.now() - st), vx = dx / dt, thrX = Math.max(90, W() * 0.28);
+        const decision = (dx > thrX || (dx > 50 && vx > 0.6)) ? 'accepted'
+          : (dx < -thrX || (dx < -50 && vx < -0.6)) ? 'rejected'
+          : (dy < -110 && Math.abs(dx) < thrX) ? 'unsure' : null;
+        if (decision) { fly(decision); return; }
+        card.style.transition = 'transform .2s ease-out';
+        card.style.transform = '';
+        stamps(card, 0, 0, 1, 1);
+        if (!moved && dt < 300) {                                   // a tap pauses / resumes
+          const v = card.querySelector('video'); if (v) { v.paused ? v.play().catch(() => {}) : v.pause(); }
+        }
+      };
+      card.addEventListener('pointerup', end);
+      card.addEventListener('pointercancel', end);
+    }
+
+    function mount() {
+      stack.textContent = '';
+      cur = null;
+      count.textContent = queue.length ? queue.length.toLocaleString() + ' left' : '';
+      if (!queue.length) {
+        const d = document.createElement('div'); d.className = 'at-sw-done';
+        d.textContent = 'All reviewed for "' + groupDisplayName(atTag) + '". Nothing pending.';
+        stack.appendChild(d); btns.style.display = 'none'; muteBtn.style.display = 'none';
+        return;
+      }
+      btns.style.display = ''; muteBtn.style.display = '';
+      if (queue[1]) stack.appendChild(makeCard(queue[1], false)).classList.add('behind');
+      cur = makeCard(queue[0], true);
+      stack.appendChild(cur);
+      attachGestures(cur);
+    }
+
+    [['rejected', '✕', 'reject', 'Reject: not ' + atTag], ['unsure', '?', 'unsure', 'Not sure: set aside, no label'], ['accepted', '✓', 'accept', 'Accept: add to "' + atGroupName(atTag) + '"']].forEach(([d, t, c, title]) => {
+      const b = document.createElement('button');
+      b.className = 'at-sw-btn ' + c; b.textContent = t; b.title = title;
+      b.addEventListener('click', e => { e.stopPropagation(); fly(d); });
+      btns.appendChild(b);
+    });
+    root.append(stack, count, muteBtn, btns, toast);
+
+    const onKey = e => {
+      if (!root.isConnected || atMode !== 'pending' || e.target.closest('input, select, textarea')) return;
+      if (e.key === 'ArrowRight') fly('accepted'); else if (e.key === 'ArrowLeft') fly('rejected'); else if (e.key === 'ArrowUp') fly('unsure');
+      else return;
+      e.preventDefault();
+    };
+    const onVis = () => { const v = cur && cur.querySelector('video'); if (v) { document.hidden ? v.pause() : v.play().catch(() => {}); } };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('visibilitychange', onVis);
+    atSwipeCleanup = () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('visibilitychange', onVis);
+      clearTimeout(toastTimer);
+      dispose(cur);
+    };
+    mount();
+    return root;
+  }
+
   function renderAutotagView() {
     if (!autotagViewEl) return;
     releaseGridPreviews(autotagViewEl);
+    if (atSwipeCleanup) { atSwipeCleanup(); atSwipeCleanup = null; }
     const openPanels = ['at-picker', 'at-run-panel'].map(id => document.getElementById(id)).filter(Boolean);   // survive a re-render
     autotagViewEl.innerHTML = '';
 
@@ -5695,7 +5880,8 @@ render();
     if (!tags.includes(atTag)) tags.push(atTag);
     tags.forEach(t => {
       const o = document.createElement('option');
-      o.value = t; o.textContent = groupDisplayName(t); o.selected = t === atTag;
+      const low = atData && (atData.lowConfidenceTags || []).includes(t);
+      o.value = t; o.textContent = groupDisplayName(t) + (low ? ' · low confidence' : ''); o.selected = t === atTag;
       sel.appendChild(o);
     });
     // Ticked in "Tags…" but not trained yet: listed, but nothing to review until the next run
@@ -5739,18 +5925,24 @@ render();
       const d = document.createElement('div'); d.id = 'autotag-msg'; d.textContent = text; grid.appendChild(d);
     };
     const list = sortVideos(atData && atData[atMode] ? atData[atMode] : [], 'autotag');  // unsure may be missing on an older server
+    const cardMode = isMobilePlayer() && atMode === 'pending' && atViewMode === 'cards' && !!atData && atData.available && list.length > 0 && !atError;
     if (atError) msg(atError);
     if (!atData) { if (!atError) msg('Loading…'); }
     else if (!atData.available) msg('No suggestions yet. Run the autotagTT job first.');
     else if (!list.length) msg(atMode === 'pending' ? 'No pending suggestions for "' + atTag + '".' : 'Nothing here yet.');
-    else {
+    else if (!cardMode) {
       const ctx = list.map(it => {
         const cs = coverSrcFor(it.id), inf = getVideoInfo(it.id);
         return { id: it.id, coverSrc: cs, videoPath: getVideoPath(cs), authorName: inf.authorName || '', desc: inf.desc || '' };
       });
       fillGrid(grid, list, (it, i) => buildAutotagCard(it, i, ctx));
     }
-    row2.append(buildGridControls('autotag', grid, autotagViewEl), chip);
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'at-mode'; viewBtn.textContent = atViewMode === 'cards' ? 'Grid' : 'Cards'; viewBtn.title = 'Switch between swipe cards and the grid';
+    viewBtn.addEventListener('click', () => { atViewMode = atViewMode === 'cards' ? 'grid' : 'cards'; try { localStorage.setItem('sp_at_view', atViewMode); } catch (_) {} renderAutotagView(); });
+    const showViewBtn = isMobilePlayer() && atMode === 'pending';
+    if (cardMode) row2.append(viewBtn, chip);
+    else row2.append(...(showViewBtn ? [viewBtn] : []), buildGridControls('autotag', grid, autotagViewEl), chip);
     const miss = atMissingAccepted();
     let banner = null;
     if (miss.length && atMode === 'accepted') {
@@ -5763,8 +5955,14 @@ render();
       b.addEventListener('click', () => atRestoreAccepted(b, m));
       banner.append(t, b, m);
     }
-    autotagViewEl.append(head, ...(banner ? [banner] : []), grid, ...openPanels);
-    observeGridPreviews(grid);
+    let lowBanner = null;
+    if (atData && atData.lowConfidence) {
+      lowBanner = document.createElement('div');
+      lowBanner.id = 'at-lowconf';
+      lowBanner.textContent = 'Low confidence: the AI only does a little better than chance on this tag, so treat these as guesses. Every accept and reject teaches it. No AI tags are made for it yet.';
+    }
+    autotagViewEl.append(head, ...(lowBanner ? [lowBanner] : []), ...(banner ? [banner] : []), cardMode ? buildSwipeStack(list) : grid, ...openPanels);
+    if (!cardMode) observeGridPreviews(grid);
   }
 
   function showAutotagTab() {
@@ -5799,6 +5997,7 @@ render();
 
   function hideAutotagView() {
     if (!autotagTabActive) return;
+    if (atSwipeCleanup) { atSwipeCleanup(); atSwipeCleanup = null; }
     autotagTabActive = false;
     releaseGridPreviews(autotagViewEl);
     if (autotagViewEl) autotagViewEl.style.display = 'none';
@@ -6244,6 +6443,9 @@ render();
     frMouthLab.append(frMouth, document.createTextNode(' Also look at the lower face (finds small details such as braces)'));
     const frBar = document.createElement('div');
     frBar.className = 'at-frbar';
+    const frTextLab = document.createElement('label');
+    const frText = document.createElement('input'); frText.type = 'checkbox'; frText.checked = true;
+    frTextLab.append(frText, document.createTextNode(' Also use each video\'s caption as a clue (read and embedded on your server only)'));
     const frInfo = document.createElement('div');
     frInfo.className = 'at-note';
     const frTrial = document.createElement('div');
@@ -6263,7 +6465,7 @@ render();
       return t;
     };
     const frSave = async (confirmed) => {
-      const body = { mode: frMode.value, mouth: frMouth.checked, budget_min: parseInt(frBudget.value, 10) };
+      const body = { mode: frMode.value, mouth: frMouth.checked, text: frText.checked, budget_min: parseInt(frBudget.value, 10) };
       if (body.mode === 'full' && !confirmed) {
         const ok = window.confirm('Full scan: reads frames from every video in the archive on your server.\n\n' + frEstimate() + '\n\nIt runs inside the normal runs (up to ' + body.budget_min + ' min each) and can be stopped by switching to Off. Start?');
         if (!ok) { frMode.value = (atRun && atRun.frames ? atRun.frames.config.mode : 'off'); return; }
@@ -6276,10 +6478,11 @@ render();
     frMode.addEventListener('change', () => frSave(false));
     frBudget.addEventListener('change', () => frSave(true));
     frMouth.addEventListener('change', () => frSave(true));
-    fr.append(frHead, frNote, frMode, frBudget, frMouthLab, frBar, frInfo, frTrial, frMsg);
+    frText.addEventListener('change', () => frSave(true));
+    fr.append(frHead, frNote, frMode, frBudget, frMouthLab, frTextLab, frBar, frInfo, frTrial, frMsg);
     panel._renderFrames = () => {
       const f = atRun && atRun.frames;
-      if (f && !frLoaded) { frMode.value = f.config.mode; frBudget.value = String(f.config.budget_min); frMouth.checked = f.config.mouth; frLoaded = true; }
+      if (f && !frLoaded) { frMode.value = f.config.mode; frBudget.value = String(f.config.budget_min); frMouth.checked = f.config.mouth; frText.checked = f.config.text !== false; frLoaded = true; }
       const fm = atFramesModel();
       frBar.textContent = '';
       if (fm) frBar.appendChild(makeProgressBar(fm, true));
@@ -6318,7 +6521,10 @@ render();
         row.className = 'at-run-row';
         const nm = document.createElement('span'); nm.textContent = groupDisplayName(tag);
         const info = document.createElement('span'); info.className = 'at-note';
-        info.textContent = m.gate === 'weak' ? 'too weak to use' : (m.pending + ' to review, ' + m.ai_count + ' AI-tagged');
+        const using = m.features && m.features !== 'cover' ? ' · uses ' + m.features.replace('+', ' + ') : '';
+        info.textContent = (m.verdict === 'hopeless' ? 'hopeless: consider removing'
+          : m.gate === 'weak' ? 'low confidence: ' + m.pending + ' to review'
+          : m.pending + ' to review, ' + m.ai_count + ' AI-tagged') + using;
         row.append(nm, info);
         results.appendChild(row);
       });
@@ -6339,6 +6545,9 @@ render();
     let enabled = [];
     try { enabled = (await (await fetch('/api/autotag/tags', { cache: 'no-store' })).json()).enabled || []; } catch (_) {}
     const sel = new Set(enabled);
+    if (!atRun) { try { await atPollRun(); } catch (_) {} }
+    const health = (atRun && atRun.result) || {};          // last run's per-tag verdicts: usable / review_only / hopeless
+    const boxes = {};
     const panel = document.createElement('div');
     panel.id = 'at-picker';
     const h = document.createElement('div');
@@ -6356,12 +6565,23 @@ render();
       const cb = document.createElement('input');
       cb.type = 'checkbox'; cb.checked = sel.has(key);
       cb.addEventListener('change', () => { cb.checked ? sel.add(key) : sel.delete(key); });
+      boxes[key] = cb;
       const nm = document.createElement('span');
       nm.textContent = g.name;
       const ct = document.createElement('span');
       ct.className = 'at-note';
       ct.textContent = g.videoIds.length + (g.videoIds.length < 30 ? ' (too few)' : '');
       row.append(cb, nm, ct);
+      const hv = health[key];
+      if (hv && hv.verdict) {
+        const chip = document.createElement('span');
+        chip.className = 'at-chip-v ' + hv.verdict;
+        chip.textContent = (hv.verdict === 'usable' ? 'usable' : hv.verdict === 'review_only' ? 'review only' : 'hopeless') + ' · AUC ' + Number(hv.auc).toFixed(2);
+        chip.title = hv.verdict === 'usable' ? 'The AI can label this tag.'
+          : hv.verdict === 'review_only' ? 'Weak, but promising: review its short list to teach it.'
+          : 'Almost no signal or too few examples. Consider removing it to keep runs short.';
+        row.appendChild(chip);
+      }
       list.appendChild(row);
     });
     const msg = document.createElement('span');
@@ -6378,9 +6598,22 @@ render();
     const close = document.createElement('button');
     close.className = 'at-mode'; close.textContent = 'Close';
     close.addEventListener('click', () => panel.remove());
+    const drop = document.createElement('button');
+    drop.className = 'at-mode'; drop.textContent = 'Untick hopeless';
+    drop.title = 'Untick the tags the last run found to have almost no signal, then press Save';
+    const hopelessTicked = () => Object.keys(health).filter(k => health[k].verdict === 'hopeless' && sel.has(k));
+    const refreshDrop = () => { drop.disabled = !hopelessTicked().length; };
+    refreshDrop();
+    Object.values(boxes).forEach(cb => cb.addEventListener('change', refreshDrop));
+    drop.addEventListener('click', () => {
+      const hs = hopelessTicked();
+      hs.forEach(k => { sel.delete(k); if (boxes[k]) boxes[k].checked = false; });
+      msg.textContent = 'Unticked ' + hs.length + '. Press Save to keep that.';
+      refreshDrop();
+    });
     const foot = document.createElement('div');
     foot.className = 'at-picker-foot';
-    foot.append(save, close, msg);
+    foot.append(save, drop, close, msg);
     panel.append(h, note, list, foot);
     autotagViewEl.appendChild(panel);
   }
@@ -6825,6 +7058,31 @@ render();
       .at-mode { background: rgba(255,255,255,.06); border: 1px solid #444; color: #999; border-radius: 12px; padding: 2px 10px; font-size: 12px; line-height: 18px; cursor: pointer; }
       .at-mode.on { color: #fff; background: rgba(255,255,255,.14); }
       #autotag-grid { flex: 1; overflow-y: auto; padding: 14px 18px; display: grid; grid-template-columns: repeat(auto-fill,minmax(150px,1fr)); gap: 14px; align-content: start; }
+      /* phone swipe review */
+      #at-swipe { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; }
+      .at-sw-stack { position: absolute; inset: 0; }
+      .at-sw-card { position: absolute; inset: 0; background: #111; will-change: transform; touch-action: none; }
+      .at-sw-card.behind { transform: scale(.96); opacity: .7; pointer-events: none; }
+      .at-sw-img, .at-sw-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+      .at-sw-stamp { position: absolute; top: 56px; padding: 4px 12px; border: 3px solid; border-radius: 8px; font-size: 26px; font-weight: 800; letter-spacing: 1px; opacity: 0; pointer-events: none; background: rgba(0,0,0,.25); }
+      .at-sw-stamp.acc { left: 18px; color: #4caf50; transform: rotate(-12deg); }
+      .at-sw-stamp.rej { right: 18px; color: #f44336; transform: rotate(12deg); }
+      .at-sw-stamp.uns { left: 50%; top: 90px; color: #ffc107; transform: translateX(-50%); }
+      .at-sw-info { position: absolute; left: 0; right: 0; bottom: 0; padding: 70px 16px 108px; background: linear-gradient(transparent, rgba(0,0,0,.78)); color: #fff; pointer-events: none; }
+      .at-sw-user { font-weight: 700; font-size: 15px; margin-right: 8px; pointer-events: auto; text-shadow: 0 1px 4px #000; }
+      .at-sw-score { font-size: 12px; background: rgba(0,0,0,.6); border-radius: 8px; padding: 1px 7px; }
+      .at-sw-cap { margin-top: 4px; font-size: 13px; line-height: 1.35; text-shadow: 0 1px 4px #000; }
+      .at-sw-count { position: absolute; top: 10px; left: 12px; font-size: 12px; color: #fff; background: rgba(0,0,0,.55); border-radius: 10px; padding: 2px 9px; z-index: 5; pointer-events: none; }
+      .at-sw-mute { position: absolute; top: 8px; right: 10px; z-index: 6; width: 36px; height: 36px; border-radius: 50%; border: none; background: rgba(0,0,0,.55); color: #fff; display: flex; align-items: center; justify-content: center; }
+      .at-sw-btns { position: absolute; left: 0; right: 0; bottom: 18px; z-index: 6; display: flex; justify-content: center; align-items: center; gap: 22px; pointer-events: none; }
+      .at-sw-btn { pointer-events: auto; width: 62px; height: 62px; border-radius: 50%; border: 2px solid; background: rgba(0,0,0,.55); font-size: 28px; line-height: 1; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+      .at-sw-btn.reject { color: #f44336; border-color: #f44336; } .at-sw-btn.accept { color: #4caf50; border-color: #4caf50; }
+      .at-sw-btn.unsure { width: 48px; height: 48px; font-size: 22px; color: #ffc107; border-color: #ffc107; }
+      .at-sw-toast { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 7; background: rgba(30,30,30,.92); color: #eee; border-radius: 16px; padding: 6px 14px; font-size: 13px; display: none; white-space: nowrap; align-items: center; gap: 10px; }
+      .at-sw-toast.on { display: flex; }
+      .at-sw-toast button { background: none; border: none; color: #4fc3f7; font-weight: 700; font-size: 13px; padding: 0 2px; }
+      .at-sw-done { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 30px; color: #999; font-size: 14px; line-height: 1.5; }
+      #at-lowconf { padding: 8px 18px; background: rgba(79,195,247,.10); border-bottom: 1px solid #1d4e63; font-size: 12px; color: #9ed8f0; line-height: 1.45; flex-shrink: 0; }
       #at-restore { display: flex; align-items: center; gap: 10px; padding: 8px 18px; background: rgba(255,193,7,.12); border-bottom: 1px solid #5a4a10; font-size: 13px; flex-wrap: wrap; flex-shrink: 0; }
       #autotag-msg { grid-column: 1 / -1; color: #888; text-align: center; padding: 40px 10px; font-size: 13px; line-height: 1.6; }
       .at-score { position: absolute; bottom: 4px; left: 4px; background: rgba(0,0,0,.7); color: #ddd; border-radius: 8px; padding: 1px 7px; font-size: 11px; pointer-events: none; z-index: 2; }
@@ -6857,6 +7115,8 @@ render();
       .sp-prog { position: absolute; left: 0; bottom: 0; height: 3px; background: #4fc3f7; border-radius: 2px; pointer-events: none; transition: width .6s; max-width: 100%; }
       #sp-sync-note { position: fixed; left: 12px; bottom: 12px; z-index: 99999; max-width: min(420px, calc(100vw - 24px)); background: #1e1e1e; border: 1px solid #555; color: #ddd; border-radius: 8px; padding: 8px 12px; font-size: 12px; line-height: 1.4; box-shadow: 0 4px 20px rgba(0,0,0,.7); cursor: pointer; display: none; }
       #sp-sync-note.warn { border-color: #f44336; background: #3a1a1a; color: #ffb4a8; }
+      .at-chip-v { font-size: 11px; padding: 0 7px; border-radius: 9px; border: 1px solid #444; white-space: nowrap; }
+      .at-chip-v.usable { color: #81c784; border-color: #2e5b31; } .at-chip-v.review_only { color: #9ed8f0; border-color: #1d4e63; } .at-chip-v.hopeless { color: #ef9a9a; border-color: #6b2b2b; }
       .at-frames { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid #333; margin-top: 10px; padding-top: 10px; font-size: 13px; }
       .at-frames select { background: #1e1e1e; border: 1px solid #444; border-radius: 6px; color: #ddd; padding: 3px 6px; }
       .at-run-sched { display: flex; align-items: center; gap: 8px; font-size: 13px; border-top: 1px solid #333; padding-top: 10px; }
