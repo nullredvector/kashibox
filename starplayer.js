@@ -6558,6 +6558,15 @@ render();
   // True when running inside the Kashibox iOS app (Capacitor native bridge)
   const isCap = !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.KashiboxCast);
 
+  // DEBUG: show Capacitor status on screen — remove once Cast is working
+  (function() {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(0,0,0,.8);color:#fff;font-size:13px;padding:6px 10px;text-align:center';
+    d.textContent = 'Cap:' + !!(window.Capacitor) + ' Plugin:' + isCap;
+    document.body ? document.body.appendChild(d) : document.addEventListener('DOMContentLoaded', () => document.body.appendChild(d));
+    setTimeout(() => d.remove(), 8000);
+  })();
+
   function initCapCast() {
     if (!isCap) return;
     const Plugin = window.Capacitor.Plugins.KashiboxCast;
