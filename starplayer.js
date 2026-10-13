@@ -4429,20 +4429,37 @@
     function startBlob(v) {
       if (v._blob || !v._netSrc) return;
       const bl = v._blob = { state: 'fetching' };
-      fetch(v._netSrc).then(r => (r.ok ? r.blob() : null)).then(b => {
+      fetch(v._netSrc).then(r => (r.ok ? r.blob() : (loopLog('copy http ' + r.status), null))).then(b => {
         if (v._blob !== bl) return;   // the video moved on while this was downloading
-        if (!b || b.size > 80e6) { v._blob = null; return; }
+        if (!b || b.size > 80e6) { if (b) loopLog('copy too big ' + Math.round(b.size / 1e6) + 'MB'); v._blob = null; return; }
         bl.url = URL.createObjectURL(b); blobUrls.add(bl.url); bl.state = 'ready';
-      }).catch(() => { if (v._blob === bl) v._blob = null; });
+        loopLog('copy ready ' + (b.size / 1e6).toFixed(1) + 'MB');
+      }).catch(e => { loopLog('copy failed ' + String(e && e.name || e).slice(0, 20)); if (v._blob === bl) v._blob = null; });
     }
-    function blankCopy(c) {
+    // Average brightness (0-255) of what a video/canvas currently shows, or -1 if it cannot be read. iOS can hand back
+    // a transparent OR an opaque black copy when it will not give up the frame, so both count as blank (below LUM_MIN).
+    const LUM_MIN = 6;
+    const lumProbe = document.createElement('canvas'); lumProbe.width = lumProbe.height = 8;
+    function frameLum(src) {
       try {
-        const t = document.createElement('canvas'); t.width = t.height = 8;
-        const x = t.getContext('2d'); x.drawImage(c, 0, 0, 8, 8);
+        const x = lumProbe.getContext('2d', { willReadFrequently: true });
+        x.clearRect(0, 0, 8, 8); x.drawImage(src, 0, 0, 8, 8);
         const d = x.getImageData(0, 0, 8, 8).data;
-        let sum = 0; for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2] + d[i + 3];
-        return sum === 0;
-      } catch (_) { return false; }
+        let sum = 0; for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+        return sum / (64 * 3);
+      } catch (_) { return -1; }
+    }
+    // During the last second keep a copy of the latest good frame, so the still held over the loop point is a
+    // picture from just before the end rather than a grab taken at the very last moment
+    function captureStill(v) {
+      if (!v.videoWidth) return;
+      const lum = frameLum(v);
+      if (lum < LUM_MIN) return;
+      let c = v._still || document.createElement('canvas');
+      if (c.width !== v.videoWidth || c.height !== v.videoHeight) { c.width = v.videoWidth; c.height = v.videoHeight; }
+      c.getContext('2d').drawImage(v, 0, 0);
+      c._lum = Math.round(lum);
+      v._still = c;
     }
     function dropBridgeWhenFresh(v, b) {
       const gone = () => removeBridge(b);
@@ -4451,7 +4468,9 @@
         const cb = (now, md) => {
           // a frame from the end of the old round can still be in flight: wait for one from the new round
           if (md && v.duration && md.mediaTime > v.duration * 0.5 && tries++ < 30) { v.requestVideoFrameCallback(cb); return; }
-          setTimeout(gone, 40);
+          // the first frame of a round can be reported before it is on screen: wait until the clock has really moved on
+          if (md && md.mediaTime < 0.12 && tries++ < 30) { v.requestVideoFrameCallback(cb); return; }
+          setTimeout(gone, 80);
         };
         v.requestVideoFrameCallback(cb);
         setTimeout(gone, 1500);
@@ -4483,19 +4502,24 @@
       }
 
       const left = d - t;
+      if (!bridge && left > 0.12 && left < 1 && !v.paused && Date.now() - (v._stillAt || 0) > 100) { v._stillAt = Date.now(); captureStill(v); }
       if (!bridge && left >= 0 && left < 0.15 && !v.paused && v.videoWidth) {
-        let b = null, kind = 'frame';
+        let b = null, kind = 'frame', lum = '';
         try {
-          const c = document.createElement('canvas');
-          c.width = v.videoWidth; c.height = v.videoHeight;
-          c.getContext('2d').drawImage(v, 0, 0);
-          if (blankCopy(c)) {
-            const cv = v.parentElement.querySelector('.player-cover');
-            if (cv && cv.getAttribute('src')) { cv.style.transition = 'none'; cv.classList.remove('gone'); b = { cover: cv, vid: v, at: Date.now() }; kind = 'cover'; }
-          } else {
+          let c = v._still; v._still = null;
+          if (!c) {   // nothing stored (the loop point came sooner than expected): grab one now
+            const l = frameLum(v);
+            if (l >= LUM_MIN) { c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0); c._lum = Math.round(l); }
+            else lum = ' dark:' + Math.round(l);
+          }
+          if (c) {
             c.className = 'player-video sp-bridge';
             v.parentElement.insertBefore(c, v.nextSibling);
             b = { canvas: c, vid: v, at: Date.now() };
+            lum = ' lum:' + c._lum;
+          } else {
+            const cv = v.parentElement.querySelector('.player-cover');
+            if (cv && cv.getAttribute('src')) { cv.style.transition = 'none'; cv.classList.remove('gone'); b = { cover: cv, vid: v, at: Date.now() }; kind = 'cover'; }
           }
         } catch (_) {}
         bridge = b;
@@ -4505,7 +4529,7 @@
           v._blob.state = 'swapped'; swapped = true;
           v.src = v._blob.url; v.load(); startPlayback(v);
         }
-        loopLog('loop ' + (b ? kind : 'no-bridge') + ' blob:' + (v._blob ? v._blob.state : '-') + (swapped ? ' swap' : ''));
+        loopLog('loop ' + (b ? kind : 'no-bridge') + lum + ' blob:' + (v._blob ? v._blob.state : '-') + (swapped ? ' swap' : ''));
       } else if (bridge && ((t < 0.4 && left > 0.5) || Date.now() - bridge.at > 1500)) {
         const b = bridge; bridge = null;
         v._loops = (v._loops || 0) + 1;
