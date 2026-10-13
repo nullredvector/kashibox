@@ -89,6 +89,7 @@ function cleanSettings(input) {
     out.profileUrl = u;
   }
   if (typeof s.debugBanner === 'boolean') out.debugBanner = s.debugBanner;
+  if (typeof s.numericName === 'string') out.numericName = s.numericName.trim().slice(0, 30);
   return out;
 }
 

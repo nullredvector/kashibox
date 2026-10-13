@@ -340,8 +340,8 @@
     const lvl = mk('thumb-lvl');
     lvl._refresh = () => {
       const n = levels[videoId];
-      lvl.textContent = n != null ? String(n) : 'lvl';
-      lvl.title = n != null ? 'Level ' + n : 'Set level';
+      lvl.textContent = n != null ? String(n) : NUM_EMPTY;
+      lvl.title = n != null ? numName() + ': ' + n : 'Set ' + numName();
       lvl.classList.toggle('on', n != null);
     };
     lvl._refresh();
@@ -826,11 +826,11 @@
 
     const lvlBtn = document.createElement('button');
     lvlBtn.className = 'overlay-ctrl-btn overlay-lvl-btn';
-    lvlBtn.textContent = levels[item.id] != null ? String(levels[item.id]) : 'lvl';
+    lvlBtn.textContent = levels[item.id] != null ? String(levels[item.id]) : NUM_EMPTY;
     lvlBtn.addEventListener('click', e => {
       e.stopPropagation();
       showLevelPicker(lvlBtn, item.id, newLvl => {
-        lvlBtn.textContent = newLvl != null ? String(newLvl) : 'lvl';
+        lvlBtn.textContent = newLvl != null ? String(newLvl) : NUM_EMPTY;
         if (starsTabActive) renderStarsView();
       });
     });
@@ -1491,7 +1491,11 @@
 
   const GEAR_PATH = '<path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>';
   const SETTINGS_KEY = 'sp_settings';
-  let settings = { profileUrl: '', debugBanner: false };
+  let settings = { profileUrl: '', debugBanner: false, numericName: '' };
+  // The one-per-video number (10–23) is called "numeric tags" unless the user renames it in Settings
+  const NUM_EMPTY = '#';
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const numName = () => String(settings.numericName || '').trim() || 'numeric tags';
   let settingsTabActive = false;
   let settingsViewEl = null;
 
@@ -1651,6 +1655,28 @@
     paint();
     if (settings.profileUrl) status.textContent = 'Saved.';
 
+    // ── numeric tags ──
+    const numSec = section('Numeric tags', 'A video can carry one number from 10 to 23. This is the name shown for it across the app (buttons, the Stars filter and its page). Pick whatever fits how you use it; leave it empty to go back to \u201cnumeric tags\u201d.');
+    const numIn = document.createElement('input');
+    numIn.className = 'set-input';
+    numIn.type = 'text'; numIn.maxLength = 30;
+    numIn.placeholder = 'numeric tags';
+    numIn.value = settings.numericName || '';
+    numIn.autocomplete = 'off'; numIn.spellcheck = false;
+    const numStatus = document.createElement('div');
+    numStatus.className = 'set-status';
+    let numTimer = null;
+    numIn.addEventListener('input', () => {
+      clearTimeout(numTimer);
+      numTimer = setTimeout(() => {
+        saveSettings({ numericName: numIn.value.trim() }).then(msg => {
+          numStatus.textContent = msg || 'Saved. Buttons already on screen update when you next open them.';
+          if (starsTabActive) renderStarsView();
+        });
+      }, 450);
+    });
+    numSec.append(numIn, numStatus);
+
     // ── archive summary ──
     const d = _dbCache;
     const arch = section('Archive');
@@ -1807,7 +1833,7 @@
     sidebar.appendChild(buildLabelToggle());
 
     // ── Lvl nav item + numbered filter buttons ────────────────────────────────
-    const lvlNavItem = makeSidebarItem('__lvl_groups__', 'lvl', '');
+    const lvlNavItem = makeSidebarItem('__lvl_groups__', numName(), '');
     lvlNavItem.addEventListener('click', () => { activeView = '__lvl_groups__'; activeGroupIds.clear(); renderStarsView(); });
     sidebar.appendChild(lvlNavItem);
 
@@ -2018,7 +2044,7 @@
 
     // lvl filter button — tap: toggle inline lvl number strip / long-press: lvl groups view
     const lvlBtnActive = activeLvl.size > 0 || mobileStarsLvlOpen || activeView === '__lvl_groups__';
-    const lvlFilterBtn = makeFilterBtn('stars-filter-lvl', 'lvl', 'Level filter (hold for groups)', lvlBtnActive, () => {});
+    const lvlFilterBtn = makeFilterBtn('stars-filter-lvl', NUM_EMPTY, numName() + ' filter (hold for groups)', lvlBtnActive, () => {});
     let _lvlTimer = null;
     lvlFilterBtn.addEventListener('pointerdown', () => {
       _lvlTimer = setTimeout(() => {
@@ -2111,15 +2137,15 @@
       // ── Lvl groups view ─────────────────────────────────────────────────────
       const occupiedLvls = Object.keys(levelGroupMap).map(Number).sort((a, b) => a - b);
       mainHeader.innerHTML =
-        `<span class="stars-main-title">lvl</span>` +
+        `<span class="stars-main-title">${esc(numName())}</span>` +
         `<span class="stars-main-count">${occupiedLvls.length} group${occupiedLvls.length !== 1 ? 's' : ''}</span>`;
       mobileTitle.innerHTML =
-        `<span class="stars-main-title">lvl</span><span class="stars-main-count">${occupiedLvls.length} group${occupiedLvls.length !== 1 ? 's' : ''}</span>`;
+        `<span class="stars-main-title">${esc(numName())}</span><span class="stars-main-count">${occupiedLvls.length} group${occupiedLvls.length !== 1 ? 's' : ''}</span>`;
 
       if (!occupiedLvls.length) {
         const empty = document.createElement('div');
         empty.id = 'stars-empty';
-        empty.textContent = 'No levels assigned yet.';
+        empty.textContent = 'Nothing in ' + numName() + ' yet.';
         grid.appendChild(empty);
       } else {
         occupiedLvls.forEach(n => {
@@ -2173,7 +2199,7 @@
         const empty = document.createElement('div');
         empty.id = 'stars-empty';
         empty.innerHTML = activeLvl.size > 0
-          ? 'No tagged videos at this level.'
+          ? 'No tagged videos with this number.'
           : 'No tagged videos yet.<br>Use ⊕ or the braces button on a video to add it to a group.';
         grid.appendChild(empty);
       } else {
@@ -2224,7 +2250,7 @@
         const empty = document.createElement('div');
         empty.id = 'stars-empty';
         empty.textContent = _dbCache
-          ? (activeLvl.size > 0 ? 'No disappeared videos at this level.' : 'No disappeared videos.')
+          ? (activeLvl.size > 0 ? 'No disappeared videos with this number.' : 'No disappeared videos.')
           : 'Loading the archive database…';
         grid.appendChild(empty);
       } else {
@@ -2390,7 +2416,7 @@
     rmBtn.className = 'stars-grid-remove stars-grid-x';
     const isGlobalView = activeView === null && activeGroupIds.size === 0;
     const isInGroup    = activeView === null && activeGroupIds.size > 0;
-    rmBtn.title = onRemoveOverride ? 'Remove level'
+    rmBtn.title = onRemoveOverride ? 'Remove ' + numName()
       : (isGlobalView || activeView === '__ungrouped__' || activeView === '__super__') ? 'Remove from Stars'
       : 'Remove from group';
     rmBtn.textContent = '✕';
@@ -3900,12 +3926,12 @@
 
     const lvlBtn = document.createElement('button');
     lvlBtn.className = 'player-ctrl-btn player-lvl-btn';
-    lvlBtn.title = 'Set level';
+    lvlBtn.title = 'Set ' + numName();
     lvlBtn.addEventListener('click', e => {
       e.stopPropagation();
       if (!currentItem) return;
       showLevelPicker(lvlBtn, currentItem.id, newLvl => {
-        lvlBtn.textContent = newLvl != null ? String(newLvl) : 'lvl';
+        lvlBtn.textContent = newLvl != null ? String(newLvl) : NUM_EMPTY;
         lvlBtn.classList.toggle('active', newLvl != null);
         if (starsTabActive) renderStarsView();
       });
@@ -4006,7 +4032,7 @@
       bracesBtn.dataset.vid = item.id;
       bracesBtn._refresh();
 
-      lvlBtn.textContent = levels[item.id] != null ? String(levels[item.id]) : 'lvl';
+      lvlBtn.textContent = levels[item.id] != null ? String(levels[item.id]) : NUM_EMPTY;
       lvlBtn.classList.toggle('active', levels[item.id] != null);
       tagUI.refresh();
 
@@ -4453,6 +4479,7 @@
     const initInh    = safeJson(vidList.filter(v => superState(v.id) === 'inherited').map(v => v.id));
     const initGroups = safeJson(groups);
     const initLevels = safeJson(levels);
+    const initNumName = safeJson(numName());
     const apiOrigin  = location.origin;
 
     win.document.write(`<!DOCTYPE html>
@@ -4602,7 +4629,7 @@ function showLvlPicker(btn,id){
       if(cur===n){delete lv[id];}else{lv[id]=n;}
       sl(lv);
       const newCur=lv[id]??null;
-      btn.textContent=newCur!=null?String(newCur):'lvl';
+      btn.textContent=newCur!=null?String(newCur):'#';
       closePicker();
     });
     p.appendChild(b);
@@ -4711,10 +4738,10 @@ function render(){
   });
   rc.appendChild(bb);
 
-  // lvl
+  const NUMNAME=${initNumName};
   const lb=document.createElement('button');
   const curL=ll()[item.id]??null;
-  lb.className='b blvl'; lb.textContent=curL!=null?String(curL):'lvl'; lb.title='Set level';
+  lb.className='b blvl'; lb.textContent=curL!=null?String(curL):'#'; lb.title='Set '+NUMNAME;
   lb.addEventListener('click',e=>{e.stopPropagation();showLvlPicker(lb,item.id);});
   rc.appendChild(lb);
 
@@ -5704,7 +5731,7 @@ render();
     const up = mk('rail-up', 'Add to Liked', THUMB_UP_SVG);
     const down = mk('rail-down', 'Add to Disliked', THUMB_DOWN_SVG);
     const star = mk('rail-star', 'Star'); star.textContent = '★';
-    const lvl = mk('rail-lvl', 'Set level'); lvl.textContent = 'lvl';
+    const lvl = mk('rail-lvl', 'Set ' + numName()); lvl.textContent = NUM_EMPTY;
     const braces = makeBracesBtn('sp-rail-btn', null, 26);
     const react = (name, other) => {
       const it = getItem(); if (!it) return;
@@ -5737,7 +5764,7 @@ render();
       paintStarBtn(star, it.id, false);
       braces.dataset.vid = it.id;
       if (braces._refresh) braces._refresh();
-      lvl.textContent = levels[it.id] != null ? String(levels[it.id]) : 'lvl';
+      lvl.textContent = levels[it.id] != null ? String(levels[it.id]) : NUM_EMPTY;
       lvl.classList.toggle('active', levels[it.id] != null);
       tagUI.refresh();
     }
@@ -6780,7 +6807,7 @@ render();
       nav.appendChild(tab);
     }
 
-    // autotagTT review tab — last in the nav, after the log tab
+    // autotagTT review tab — just left of Following
     if (!nav.querySelector('.autotag-tab')) {
       const tab = makeNavTab('autotag-tab',
         '<path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/><path d="M3 3h18v2H3z"/>',
@@ -6788,7 +6815,8 @@ render();
         () => showAutotagTab()
       );
       if (autotagTabActive) tab.classList.add('active');
-      nav.appendChild(tab);
+      const fol = nav.querySelector('.following');
+      if (fol) fol.insertAdjacentElement('beforebegin', tab); else nav.appendChild(tab);
     }
 
     syncAuthorTabs();
@@ -7089,7 +7117,6 @@ render();
       }
       nav .log-tab { margin-left: auto !important; }
       nav .stars-tab { order: -1; }
-      nav .autotag-tab { order: 100; }
       /* the app keeps its own tab marked active underneath; hide that highlight while Stars is showing */
       nav:has(.stars-tab.active) .pressable.active:not(.stars-tab) {
         color: var(--inactive, rgb(160,160,160)) !important;
