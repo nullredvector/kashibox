@@ -23,7 +23,7 @@ const MIME = {
 
 // ── Account check ───────────────────────────────────────────────────────────
 // Asks the address from the "profile link" setting whether a username still exists. A page that was
-// removed answers 404/410 or redirects to a /404 page; anything else that goes wrong (blocked, rate
+// removed answers 404/410, redirects to a /404 page or serves a page whose own data says the account doesn't exist; anything else that goes wrong (blocked, rate
 // limited, offline) is "unknown", never "gone". Answers are cached so a tab is checked rarely.
 const profileCache = new Map();    // name -> { state, at }
 const profileBusy  = new Map();    // name -> Promise
@@ -36,14 +36,27 @@ function fetchStatus(target, hops) {
     if (/(^|\/)404\/?$/.test(u.pathname)) return resolve('gone');
     const mod = u.protocol === 'https:' ? require('https') : http;
     const req = mod.get(u, { timeout: 8000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; kashibox)', 'Accept': 'text/html' } }, r => {
-      r.resume();
       const code = r.statusCode || 0;
-      if (code === 404 || code === 410) return resolve('gone');
+      if (code === 404 || code === 410) { r.resume(); return resolve('gone'); }
       if (code >= 300 && code < 400 && r.headers.location) {
+        r.resume();
         if (hops >= 5) return resolve('unknown');
         return fetchStatus(new URL(r.headers.location, u).toString(), hops + 1).then(resolve);
       }
-      resolve(code >= 200 && code < 300 ? 'ok' : 'unknown');
+      if (code < 200 || code >= 300) { r.resume(); return resolve('unknown'); }
+      // A missing account can still answer 200 with a "couldn't find this account" page. That sentence also sits in
+      // the script text of normal pages, so look at the page's own status for the profile instead (10202 / 10221 = no such account).
+      let body = '', done = false;
+      const finish = state => { if (!done) { done = true; r.destroy(); resolve(state); } };
+      r.setEncoding('utf8');
+      r.on('data', c => {
+        body += c;
+        const m = /"webapp\.user-detail":\{"statusCode":(\d+)/.exec(body);
+        if (m) return finish(m[1] === '10202' || m[1] === '10221' ? 'gone' : 'ok');
+        if (body.length > 3e6) finish('ok');
+      });
+      r.on('end', () => finish('ok'));
+      r.on('error', () => finish('unknown'));
     });
     req.on('timeout', () => { req.destroy(); resolve('unknown'); });
     req.on('error', () => resolve('unknown'));
