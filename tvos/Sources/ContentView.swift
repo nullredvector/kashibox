@@ -97,8 +97,7 @@ struct ContentView: View {
         touch()
     }
 
-    // Click: open the highlighted session, or mute / unmute the selected video. Only one video is ever audible:
-    // unmuting one mutes whichever was playing sound before.
+    // Click: star or un-star the selected video (with an empty grid: open the highlighted session).
     private func handleSelect() {
         if store.panels.isEmpty {
             openSession()
@@ -106,11 +105,12 @@ struct ContentView: View {
         }
         guard let panel = selectedPanel else { return }
         selectedID = panel.id
-        audibleID = (audibleID == panel.id) ? nil : panel.id
+        panel.toggleStar()
         touch()
     }
 
-    // Play / Pause: star or un-star the selected video.
+    // Play / Pause: mute or unmute the selected video. Only one video is ever audible:
+    // unmuting one mutes whichever was playing sound before.
     private func handlePlayPause() {
         if store.panels.isEmpty {
             openSession()
@@ -118,7 +118,7 @@ struct ContentView: View {
         }
         guard let panel = selectedPanel else { return }
         selectedID = panel.id
-        panel.toggleStar()
+        audibleID = (audibleID == panel.id) ? nil : panel.id
         touch()
     }
 
