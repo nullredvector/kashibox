@@ -28,7 +28,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 - **Built for big archives:** grids are filled in chunks as you scroll, so a collection with tens of thousands of videos stays responsive.
 
 ### Browse by creator
-- **Username tabs:** click a creator's name anywhere to open all of their videos in a tab of their own. Double-click a tab to open that account's profile page, if you have set a profile link in Settings (an address with `{username}` in it).
+- **Username tabs:** click a creator's name anywhere to open all of their videos in a tab of their own. Double-click a tab to open that account's profile page, if you have set a profile link in Settings (an address with `{username}` in it). With a profile link set, desktop tabs also check whether the account still exists and show its name in red when it doesn't. Your server makes that check (never the browser) and caches the answer for 12 hours.
 - **Tab sessions:** open tabs are saved automatically as sessions you can restore, rename or delete later.
 - **Player window:** a pop-out player that doesn't disturb the tab you are on, with the same star, tag and level tools.
 
