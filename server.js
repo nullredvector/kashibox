@@ -3,6 +3,8 @@ const http     = require('http');
 const fs       = require('fs');
 const path     = require('path');
 const url      = require('url');
+const zlib     = require('zlib');
+const crypto   = require('crypto');
 const dbStars  = require('./db_stars');
 
 const ARCHIVE_DIR = process.env.ARCHIVE_DIR || '/archive';
@@ -20,6 +22,25 @@ const MIME = {
   '.png':  'image/png',
   '.json': 'application/json',
 };
+
+// ── Disk counts ──────────────────────────────────────────────────────────────
+// How many videos are really in each folder (a count of .mp4 files, nothing else), cached for a minute.
+let diskMemo = null;
+async function countMp4(dir) {
+  try { return (await fs.promises.readdir(dir)).filter(f => f.endsWith('.mp4')).length; } catch (_) { return 0; }
+}
+async function diskCounts() {
+  if (diskMemo && Date.now() - diskMemo.at < 60000) return diskMemo.out;
+  const base = path.join(ARCHIVE_DIR, 'data');
+  const out = { likes: await countMp4(path.join(base, 'Likes', 'videos')), favorites: await countMp4(path.join(base, 'Favorites', 'videos')), following: 0 };
+  try {
+    for (const e of await fs.promises.readdir(path.join(base, 'Following'), { withFileTypes: true })) {
+      if (e.isDirectory() && e.name !== 'Avatars') out.following += await countMp4(path.join(base, 'Following', e.name, 'videos'));
+    }
+  } catch (_) {}
+  diskMemo = { at: Date.now(), out };
+  return out;
+}
 
 // ── Account check ───────────────────────────────────────────────────────────
 // Asks the address from the "profile link" setting whether a username still exists. A page that was
@@ -75,6 +96,54 @@ function checkProfile(name) {
   return p;
 }
 
+// ── Compression and caching for text responses ─────────────────────────────
+// The page, its script and the bigger JSON replies are sent gzipped when the browser accepts it, and files that
+// do not change between loads (the page, the script, the db files) carry an ETag so a repeat visit is a tiny 304.
+const wantsGzip = req => /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
+const MIN_GZIP = 1024;
+
+// A whole body at once (JSON replies). Never cached: only compressed.
+function sendBody(req, res, code, headers, body) {
+  const buf = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  if (buf.length >= MIN_GZIP && wantsGzip(req)) {
+    zlib.gzip(buf, { level: 5 }, (err, gz) => {
+      if (err) { res.writeHead(code, Object.assign({}, headers, { 'Content-Length': buf.length })); res.end(buf); return; }
+      res.writeHead(code, Object.assign({}, headers, { 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding', 'Content-Length': gz.length }));
+      res.end(gz);
+    });
+    return;
+  }
+  res.writeHead(code, Object.assign({}, headers, { 'Content-Length': buf.length }));
+  res.end(buf);
+}
+
+// A file from the image (page, script): read and compressed once per change, answered from memory afterwards
+const gzMemo = new Map();      // archive text file + version -> gzipped bytes
+const staticMemo = new Map();   // file -> { mtimeMs, buf, gz, etag }
+function sendStatic(req, res, file, type) {
+  fs.stat(file, (err, st) => {
+    if (err) { res.writeHead(500); res.end(path.basename(file) + ' missing'); return; }
+    let m = staticMemo.get(file);
+    const reply = () => {
+      const headers = { 'Content-Type': type, 'Cache-Control': 'no-cache', 'ETag': m.etag, 'Vary': 'Accept-Encoding' };
+      if (req.headers['if-none-match'] === m.etag) { res.writeHead(304, headers); res.end(); return; }
+      const gz = wantsGzip(req);
+      if (gz) headers['Content-Encoding'] = 'gzip';
+      const body = gz ? m.gz : m.buf;
+      headers['Content-Length'] = body.length;
+      res.writeHead(200, headers);
+      res.end(req.method === 'HEAD' ? undefined : body);
+    };
+    if (m && m.mtimeMs === st.mtimeMs) return reply();
+    fs.readFile(file, (e2, buf) => {
+      if (e2) { res.writeHead(500); res.end(path.basename(file) + ' missing'); return; }
+      m = { mtimeMs: st.mtimeMs, buf, gz: zlib.gzipSync(buf, { level: 9 }), etag: 'W/"' + crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16) + '"' };
+      staticMemo.set(file, m);
+      reply();
+    });
+  });
+}
+
 // ── Server ──────────────────────────────────────────────────────────────────
 // App icons (Home Screen shortcut), baked into the image next to server.js
 const ICONS = {
@@ -105,9 +174,7 @@ http.createServer((req, res) => {
   if (pathname === '/api/stars') {
     if (req.method === 'GET') {
       const data = dbStars.loadWithRev();
-      const body = JSON.stringify(data);
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });
-      res.end(body);
+      sendBody(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, JSON.stringify(data));
       return;
     }
     if (req.method === 'PUT') {
@@ -145,6 +212,16 @@ http.createServer((req, res) => {
     const send = (code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
     if (!/^[\w.\-]{1,64}$/.test(name)) return send(400, { error: 'bad name' });
     checkProfile(name).then(state => send(200, { state }));
+    return;
+  }
+
+  // ── Files on disk (counts only), to compare with what the database lists ──
+  if (pathname === '/api/archive/disk' && req.method === 'GET') {
+    diskCounts().then(out => {
+      const b = JSON.stringify(out);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) });
+      res.end(b);
+    });
     return;
   }
 
@@ -204,15 +281,11 @@ http.createServer((req, res) => {
   if (pathname === '/api/autotag' && req.method === 'GET') {
     const tag = String(new URLSearchParams(url.parse(req.url).query || '').get('tag') || 'braces').toLowerCase();
     const out = dbStars.loadAutotag(tag);
-    const body = JSON.stringify(out);
-    res.writeHead(out.error ? 400 : 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });
-    res.end(body);
+    sendBody(req, res, out.error ? 400 : 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, JSON.stringify(out));
     return;
   }
   if (pathname === '/api/autotag/ai' && req.method === 'GET') {
-    const body = JSON.stringify(dbStars.loadAiTags());
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });
-    res.end(body);
+    sendBody(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, JSON.stringify(dbStars.loadAiTags()));
     return;
   }
   if (pathname === '/api/autotag/run' && req.method === 'GET') {
@@ -348,29 +421,17 @@ http.createServer((req, res) => {
   }
 
   if (pathname === '/' || pathname === '/index.html' || pathname === '/shell') {
-    fs.readFile(SHELL_FILE, (err, html) => {
-      if (err) { res.writeHead(500); res.end('shell.html missing'); return; }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-      res.end(html);
-    });
+    sendStatic(req, res, SHELL_FILE, 'text/html; charset=utf-8');
     return;
   }
 
   if (pathname === '/cast') {
-    fs.readFile(CAST_RCV_FILE, (err, html) => {
-      if (err) { res.writeHead(404); res.end('cast-receiver.html missing'); return; }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-      res.end(html);
-    });
+    sendStatic(req, res, CAST_RCV_FILE, 'text/html; charset=utf-8');
     return;
   }
 
   if (pathname === '/starplayer.js') {
-    fs.readFile(SCRIPT_FILE, (err, js) => {
-      if (err) { res.writeHead(500); res.end('starplayer.js missing'); return; }
-      res.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' });
-      res.end(js);
-    });
+    sendStatic(req, res, SCRIPT_FILE, 'application/javascript');
     return;
   }
 
@@ -428,6 +489,24 @@ http.createServer((req, res) => {
       if (!ok) { res.writeHead(416, { 'Content-Range': `bytes */${total}` }); res.end(); return; }
       res.writeHead(206, Object.assign({}, base, { 'Content-Range': `bytes ${start}-${end}/${total}`, 'Content-Length': end - start + 1 }));
       send({ start, end });
+    } else if (/\.(js|json|html)$/i.test(filePath) && total >= MIN_GZIP && wantsGzip(req) && req.method !== 'HEAD') {
+      // text from the archive (the db files): compress once per change and keep it, up to a few files
+      const key = filePath + '|' + etag;
+      let gz = gzMemo.get(key);
+      const out = body => {
+        res.writeHead(200, Object.assign({}, base, { 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding', 'Content-Length': body.length }));
+        res.end(body);
+      };
+      if (gz) return out(gz);
+      fs.readFile(filePath, (e2, buf) => {
+        if (e2) { res.writeHead(500); res.end('Server error'); return; }
+        zlib.gzip(buf, { level: 6 }, (e3, z) => {
+          if (e3) { res.writeHead(200, Object.assign({}, base, { 'Content-Length': buf.length })); res.end(buf); return; }
+          if (gzMemo.size >= 12) gzMemo.delete(gzMemo.keys().next().value);
+          gzMemo.set(key, z);
+          out(z);
+        });
+      });
     } else {
       res.writeHead(200, Object.assign({}, base, { 'Content-Length': total }));
       send(undefined);
