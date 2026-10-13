@@ -1218,23 +1218,10 @@
     return set;
   }
 
-  // Everything in the Super stars category: the videos you picked, then every other downloaded video by those accounts
-  let _superItemsMemo = null;
+  // The Super stars category: only the videos that were actually super-starred (a creator's other videos get the blue
+  // icon, but do not appear here)
   function superVideoItems() {
-    const d = _dbCache;
-    if (_superItemsMemo && _superItemsMemo.stamp === _starsStamp && _superItemsMemo.db === d) return _superItemsMemo.items;
-    const items = Object.entries(stars).filter(([, x]) => x.super).map(([id, x]) => ({ ...x, id }));
-    const authors = d ? superAuthorSet() : null;
-    if (d && authors.size) {
-      const have = new Set(items.map(x => x.id)), dl = downloadedSet();
-      for (const [id, v] of Object.entries(d.videos)) {
-        if (have.has(id) || !authors.has(String(v.authorId)) || !dl.has(id)) continue;
-        const a = d.authors[v.authorId];
-        items.push({ id, coverSrc: coverSrcFor(id), authorName: (a && a.uniqueIds && a.uniqueIds[0]) || '', desc: d.videoDescriptions[id] || '', inherited: true });
-      }
-    }
-    _superItemsMemo = { stamp: _starsStamp, db: d, items };
-    return items;
+    return Object.entries(stars).filter(([, x]) => x.super).map(([id, x]) => ({ ...x, id }));
   }
 
   // Downloaded videos per author, counted once per database load
@@ -2355,12 +2342,12 @@
       if (!videosToShow.length) {
         const empty = document.createElement('div');
         empty.id = 'stars-empty';
-        empty.textContent = 'No super stars yet. Press and hold a star to make one; the rest of that creator\u2019s videos join it.';
+        empty.textContent = 'No super stars yet. Press and hold a star to make one.';
         grid.appendChild(empty);
       } else {
         fillGrid(grid, videosToShow, star => {
           const info = getVideoInfo(star.id);
-          return buildStarsGridCard(star, info.authorName || star.authorName || '', info.desc || star.desc || '', null, star.inherited);
+          return buildStarsGridCard(star, info.authorName || star.authorName || '', info.desc || star.desc || '', null);
         });
       }
     } else if (activeView === '__disappeared__') {
