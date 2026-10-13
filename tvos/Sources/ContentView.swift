@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var showSelection = false
     @State private var hideTask: Task<Void, Never>?
     @State private var pickerIndex = 0
+    @State private var reportTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { geo in
@@ -67,6 +68,25 @@ struct ContentView: View {
         .onMoveCommand(perform: handleMove)
         .onTapGesture(perform: handleSelect)
         .onPlayPauseCommand(perform: handlePlayPause)
+        .onChange(of: store.panels.map(\.id)) { old, new in followPanels(old: old, new: new) }
+        .onChange(of: selectedID) { _, id in report(id) }
+    }
+
+    // When the selected panel's video is replaced by a new one (the grid was full), the selection stays on that slot.
+    private func followPanels(old: [String], new: [String]) {
+        if new.isEmpty { selectedID = nil; return }
+        guard let selected = selectedID, !new.contains(selected), let slot = old.firstIndex(of: selected) else { return }
+        selectedID = new[min(slot, new.count - 1)]
+        touch()
+    }
+
+    // The server needs to know the selection: once the grid is full it puts the next video sent from a phone there.
+    private func report(_ id: String?) {
+        reportTask?.cancel()
+        reportTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if !Task.isCancelled { await API.select(panelID: id) }
+        }
     }
 
     private var selectedPanel: PanelModel? {

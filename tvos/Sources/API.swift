@@ -30,6 +30,11 @@ enum API {
         return json["starred"] as? Bool
     }
 
+    /// Tells the server which panel is selected on the TV (nil = none), so a new video can take its place once the grid is full.
+    static func select(panelID: String?) async {
+        _ = await post(Config.selectURL, ["id": panelID as Any? ?? NSNull()])
+    }
+
     /// Which of these videos are starred right now.
     static func starred(among videoUrls: [String]) async -> Set<String>? {
         guard !videoUrls.isEmpty, let url = Config.starredURL(for: videoUrls),

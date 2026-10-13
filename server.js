@@ -164,6 +164,7 @@ const TV_MAX_TILES = 12;
 const tvClients = new Set();
 let tvGrid = [];
 let tvSessionId = null;   // the saved TV session the grid is being added to (null = none yet)
+let tvSelectedId = null;  // the panel selected on the TV (the TV reports it); a new video replaces it once the grid is full
 
 http.createServer((req, res) => {
   const pathname = url.parse(req.url).pathname;
@@ -459,7 +460,7 @@ http.createServer((req, res) => {
     res.write('data: ' + JSON.stringify({ type: 'state', items: tvGrid }) + '\n\n');
     tvClients.add(res);
     const beat = setInterval(() => { try { res.write(': hb\n\n'); } catch (_) {} }, 15000);
-    req.on('close', () => { clearInterval(beat); tvClients.delete(res); });
+    req.on('close', () => { clearInterval(beat); tvClients.delete(res); if (!tvClients.size) tvSelectedId = null; });
     return;
   }
   if (pathname === '/api/tv/author' && req.method === 'GET') {
@@ -533,9 +534,18 @@ http.createServer((req, res) => {
       if (!saved || !saved.items.length) { tvJson(404, { error: 'No such session' }); return; }
       tvGrid = saved.items.slice(-TV_MAX_TILES)
         .map(i => ({ id: crypto.randomBytes(6).toString('hex'), videoUrl: i.videoUrl, coverUrl: i.coverUrl || '' }));
+      tvSelectedId = null;
       tvSessionId = tvSessions.record(ARCHIVE_DIR, saved.id, tvGrid);
       tvBroadcast();
       tvJson(200, { ok: true, count: tvGrid.length });
+    });
+    return;
+  }
+  // The TV tells the server which panel is selected on it ({ id } or { id: null })
+  if (pathname === '/api/tv/select' && req.method === 'POST') {
+    tvBody(500, m => {
+      tvSelectedId = (typeof m.id === 'string' && tvGrid.some(i => i.id === m.id)) ? m.id : null;
+      tvJson(200, { ok: true });
     });
     return;
   }
@@ -555,13 +565,16 @@ http.createServer((req, res) => {
         const m = JSON.parse(Buffer.concat(chunks).toString());
         if (m.action === 'clear') {
           tvGrid = [];
+          tvSelectedId = null;
           tvSessionId = null;   // the session stays saved; the next video starts a new one
         } else if (m.action === 'add') {
           const ok = u => typeof u === 'string' && u.length < 400 && u.startsWith('/') && !u.startsWith('//') && !u.includes('..');
           if (!ok(m.videoUrl) || (m.coverUrl && !ok(m.coverUrl))) throw new Error('bad url');
           tvGrid = tvGrid.filter(i => i.videoUrl !== m.videoUrl);
-          tvGrid.push({ id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '' });
-          while (tvGrid.length > TV_MAX_TILES) tvGrid.shift();
+          const fresh = { id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '' };
+          const at = tvGrid.length >= TV_MAX_TILES ? tvGrid.findIndex(i => i.id === tvSelectedId) : -1;
+          if (at >= 0) { tvGrid[at] = fresh; tvSelectedId = fresh.id; }   // full: the selected panel gives way, in place
+          else { tvGrid.push(fresh); while (tvGrid.length > TV_MAX_TILES) tvGrid.shift(); }
           try { tvSessionId = tvSessions.record(ARCHIVE_DIR, tvSessionId, tvGrid); } catch (_) { /* the grid still works if saving fails */ }
         } else throw new Error('bad action');
         const line = 'data: ' + JSON.stringify({ type: 'state', items: tvGrid }) + '\n\n';
