@@ -21,6 +21,60 @@ const MIME = {
   '.json': 'application/json',
 };
 
+// ── Account check ───────────────────────────────────────────────────────────
+// Asks the address from the "profile link" setting whether a username still exists. A page that was
+// removed answers 404/410, redirects to a /404 page or serves a page whose own data says the account doesn't exist; anything else that goes wrong (blocked, rate
+// limited, offline) is "unknown", never "gone". Answers are cached so a tab is checked rarely.
+const profileCache = new Map();    // name -> { state, at }
+const profileBusy  = new Map();    // name -> Promise
+const PROFILE_TTL  = { ok: 12 * 3600e3, gone: 12 * 3600e3, unknown: 30 * 60e3 };
+
+function fetchStatus(target, hops) {
+  return new Promise(resolve => {
+    let u; try { u = new URL(target); } catch (_) { return resolve('unknown'); }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return resolve('unknown');
+    if (/(^|\/)404\/?$/.test(u.pathname)) return resolve('gone');
+    const mod = u.protocol === 'https:' ? require('https') : http;
+    const req = mod.get(u, { timeout: 8000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; kashibox)', 'Accept': 'text/html' } }, r => {
+      const code = r.statusCode || 0;
+      if (code === 404 || code === 410) { r.resume(); return resolve('gone'); }
+      if (code >= 300 && code < 400 && r.headers.location) {
+        r.resume();
+        if (hops >= 5) return resolve('unknown');
+        return fetchStatus(new URL(r.headers.location, u).toString(), hops + 1).then(resolve);
+      }
+      if (code < 200 || code >= 300) { r.resume(); return resolve('unknown'); }
+      // A missing account can still answer 200 with a "couldn't find this account" page. That sentence also sits in
+      // the script text of normal pages, so look at the page's own status for the profile instead (10202 / 10221 = no such account).
+      let body = '', done = false;
+      const finish = state => { if (!done) { done = true; r.destroy(); resolve(state); } };
+      r.setEncoding('utf8');
+      r.on('data', c => {
+        body += c;
+        const m = /"webapp\.user-detail":\{"statusCode":(\d+)/.exec(body);
+        if (m) return finish(m[1] === '10202' || m[1] === '10221' ? 'gone' : 'ok');
+        if (body.length > 3e6) finish('ok');
+      });
+      r.on('end', () => finish('ok'));
+      r.on('error', () => finish('unknown'));
+    });
+    req.on('timeout', () => { req.destroy(); resolve('unknown'); });
+    req.on('error', () => resolve('unknown'));
+  });
+}
+
+function checkProfile(name) {
+  const hit = profileCache.get(name);
+  if (hit && Date.now() - hit.at < PROFILE_TTL[hit.state]) return Promise.resolve(hit.state);
+  if (profileBusy.has(name)) return profileBusy.get(name);
+  const tpl = String(dbStars.loadSettings().profileUrl || '');
+  const p = (tpl && /^https?:\/\//i.test(tpl) && tpl.includes('{username}')
+    ? fetchStatus(tpl.split('{username}').join(encodeURIComponent(name)), 0) : Promise.resolve('unknown'))
+    .then(state => { profileCache.set(name, { state, at: Date.now() }); profileBusy.delete(name); return state; });
+  profileBusy.set(name, p);
+  return p;
+}
+
 // ── Server ──────────────────────────────────────────────────────────────────
 // App icons (Home Screen shortcut), baked into the image next to server.js
 const ICONS = {
@@ -83,6 +137,15 @@ http.createServer((req, res) => {
       return;
     }
     res.writeHead(405); res.end('Method not allowed'); return;
+  }
+
+  // ── Account check (does this username still exist?) ───────────────────────
+  if (pathname === '/api/profile-check' && req.method === 'GET') {
+    const name = String(new URLSearchParams(url.parse(req.url).query || '').get('name') || '');
+    const send = (code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
+    if (!/^[\w.\-]{1,64}$/.test(name)) return send(400, { error: 'bad name' });
+    checkProfile(name).then(state => send(200, { state }));
+    return;
   }
 
   // ── ttpull live log (proxy) ────────────────────────────────────────────────

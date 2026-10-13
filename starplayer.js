@@ -4985,6 +4985,23 @@ render();
   }
 
   // Keep the nav's author tabs in sync with openAuthors
+  // Desktop: ask the server (which asks the profile-link address) whether an account is still there; gone ones are red
+  const goneCache = new Map();   // name -> 'ok' | 'gone' | 'unknown'
+  function paintGone(tab, gone) {
+    tab.classList.toggle('author-gone', gone);
+    if (gone) tab.title = '@' + tab.dataset.name + ' — this account is no longer available';
+  }
+  function checkAuthorGone(name, tab) {
+    tab.dataset.name = name;
+    if (isMobilePlayer() || !profileUrlFor(name)) return;
+    if (goneCache.has(name)) { paintGone(tab, goneCache.get(name) === 'gone'); return; }
+    fetch('/api/profile-check?name=' + encodeURIComponent(name)).then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!d) return;
+      goneCache.set(name, d.state);
+      document.querySelectorAll('.author-tab').forEach(t => { if (t.dataset.name === name) paintGone(t, d.state === 'gone'); });
+    }).catch(() => {});
+  }
+
   function syncAuthorTabs() {
     const nav = document.querySelector('nav');
     if (!nav) return;
@@ -5007,6 +5024,7 @@ render();
         x.title = 'Close tab';
         x.addEventListener('click', e => { e.stopPropagation(); closeAuthorTab(a.id); });
         tab.append(label, x);
+        checkAuthorGone(a.name, tab);
         tab.addEventListener('click', () => { if (activeAuthorId !== a.id) showAuthorTab(a.id, a.name); });
         tab.addEventListener('dblclick', e => {
           if (e.target.closest('.author-tab-close')) return;
@@ -5018,7 +5036,8 @@ render();
         last?.insertAdjacentElement('afterend', tab);
       }
       tab.classList.toggle('active', a.id === activeAuthorId);
-      tab.title = '@' + a.name + (profileUrlFor(a.name) ? ' — double-click to open the profile' : '');
+      if (goneCache.get(a.name) === 'gone') paintGone(tab, true);
+      else tab.title = '@' + a.name + (profileUrlFor(a.name) ? ' — double-click to open the profile' : '');
     });
   }
 
@@ -7059,6 +7078,7 @@ render();
         border-bottom: 3px solid transparent; border-radius: 6px 6px 0 0;
         transition: color .15s, background .15s;
       }
+      nav .author-tab.author-gone .author-tab-label { color: #ff5252; }
       nav .author-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       nav .author-tab-close { font-size: 10px; line-height: 1; padding: 3px 5px; border-radius: 50%; opacity: .55; flex-shrink: 0; }
       nav .author-tab-close:hover { opacity: 1; background: rgba(255,255,255,.15); }
