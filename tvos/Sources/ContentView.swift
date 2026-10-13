@@ -167,7 +167,7 @@ struct SessionPicker: View {
                             .lineLimit(1)
                             .font(.system(size: 34, weight: isSelected ? .semibold : .regular))
                         Spacer(minLength: 24)
-                        Text("\(session.count) account\(session.count == 1 ? "" : "s")")
+                        Text("\(session.count) video\(session.count == 1 ? "" : "s") · \(session.lastUsed)")
                             .font(.system(size: 28))
                             .foregroundColor(Color(white: isSelected ? 0.85 : 0.5))
                     }
@@ -186,7 +186,7 @@ struct SessionPicker: View {
                 }
             }
             .animation(.easeInOut(duration: 0.15), value: selected)
-            Text("Swipe up or down, then click. You can also send videos from your phone.")
+            Text("Swipe up or down, then click. Videos you send from your phone are saved as a session.")
                 .font(.system(size: 26))
                 .foregroundColor(Color(white: 0.35))
         }

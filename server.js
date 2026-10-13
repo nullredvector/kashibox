@@ -7,6 +7,7 @@ const zlib     = require('zlib');
 const crypto   = require('crypto');
 const dbStars  = require('./db_stars');
 const tvAuthor = require('./tv_author');
+const tvSessions = require('./tv_sessions');
 
 const ARCHIVE_DIR = process.env.ARCHIVE_DIR || '/archive';
 const PORT        = parseInt(process.env.PORT || '8080', 10);
@@ -162,6 +163,7 @@ const CAST_RCV_FILE = path.join(__dirname, 'cast-receiver.html');
 const TV_MAX_TILES = 12;
 const tvClients = new Set();
 let tvGrid = [];
+let tvSessionId = null;   // the saved TV session the grid is being added to (null = none yet)
 
 http.createServer((req, res) => {
   const pathname = url.parse(req.url).pathname;
@@ -513,29 +515,27 @@ http.createServer((req, res) => {
     });
     return;
   }
-  // The saved tab sessions, newest first, for the TV's picker
+  // The saved TV sessions (past grids), newest first, for the TV's picker
   if (pathname === '/api/tv/sessions' && req.method === 'GET') {
-    const list = dbStars.loadSessions().filter(s => s && s.id && Array.isArray(s.tabs) && s.tabs.length)
-      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 30)
-      .map(s => ({ id: String(s.id), label: String(s.name || s.tabs.map(t => '@' + t.name).join(', ')).slice(0, 90), count: s.tabs.length }));
+    const list = tvSessions.load(ARCHIVE_DIR).filter(x => x.items.length)
+      .sort((x, y) => (y.updatedAt || 0) - (x.updatedAt || 0))
+      .map(x => ({
+        id: String(x.id), count: x.items.length, updatedAt: x.updatedAt || 0,
+        label: tvAuthor.labelFor(ARCHIVE_DIR, x.items.map(i => i.videoUrl)) || (x.items.length + ' video' + (x.items.length === 1 ? '' : 's')),
+      }));
     tvJson(200, { sessions: list });
     return;
   }
-  // Put one panel per account of a session on the TV (each panel then pages through that account's videos)
+  // Bring a saved TV session back onto the grid; further videos sent from a phone are added to it
   if (pathname === '/api/tv/session' && req.method === 'POST') {
     tvBody(2000, m => {
-      const s = dbStars.loadSessions().find(x => x && String(x.id) === String(m.id));
-      if (!s || !Array.isArray(s.tabs)) { tvJson(404, { error: 'No such session' }); return; }
-      const items = [];
-      for (const t of s.tabs) {
-        if (items.length >= TV_MAX_TILES) break;
-        const v = tvAuthor.latestVideo(ARCHIVE_DIR, t);
-        if (v && !items.some(i => i.videoUrl === v.videoUrl)) items.push({ id: crypto.randomBytes(6).toString('hex'), videoUrl: v.videoUrl, coverUrl: v.coverUrl });
-      }
-      if (!items.length) { tvJson(404, { error: 'Nothing downloaded for this session' }); return; }
-      tvGrid = items;
+      const saved = tvSessions.load(ARCHIVE_DIR).find(x => String(x.id) === String(m.id));
+      if (!saved || !saved.items.length) { tvJson(404, { error: 'No such session' }); return; }
+      tvGrid = saved.items.slice(-TV_MAX_TILES)
+        .map(i => ({ id: crypto.randomBytes(6).toString('hex'), videoUrl: i.videoUrl, coverUrl: i.coverUrl || '' }));
+      tvSessionId = tvSessions.record(ARCHIVE_DIR, saved.id, tvGrid);
       tvBroadcast();
-      tvJson(200, { ok: true, count: items.length });
+      tvJson(200, { ok: true, count: tvGrid.length });
     });
     return;
   }
@@ -555,12 +555,14 @@ http.createServer((req, res) => {
         const m = JSON.parse(Buffer.concat(chunks).toString());
         if (m.action === 'clear') {
           tvGrid = [];
+          tvSessionId = null;   // the session stays saved; the next video starts a new one
         } else if (m.action === 'add') {
           const ok = u => typeof u === 'string' && u.length < 400 && u.startsWith('/') && !u.startsWith('//') && !u.includes('..');
           if (!ok(m.videoUrl) || (m.coverUrl && !ok(m.coverUrl))) throw new Error('bad url');
           tvGrid = tvGrid.filter(i => i.videoUrl !== m.videoUrl);
           tvGrid.push({ id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '' });
           while (tvGrid.length > TV_MAX_TILES) tvGrid.shift();
+          try { tvSessionId = tvSessions.record(ARCHIVE_DIR, tvSessionId, tvGrid); } catch (_) { /* the grid still works if saving fails */ }
         } else throw new Error('bad action');
         const line = 'data: ' + JSON.stringify({ type: 'state', items: tvGrid }) + '\n\n';
         tvClients.forEach(c => { try { c.write(line); } catch (_) {} });
