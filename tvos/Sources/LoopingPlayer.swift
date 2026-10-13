@@ -9,7 +9,6 @@ final class PlayerView: UIView {
 /// An endlessly looping video that fills its frame.
 struct LoopingPlayer: UIViewRepresentable {
     let url: URL?
-    let paused: Bool
     let muted: Bool
     let onReady: () -> Void
 
@@ -43,7 +42,7 @@ struct LoopingPlayer: UIViewRepresentable {
     func updateUIView(_ view: PlayerView, context: Context) {
         guard let player = context.coordinator.player else { return }
         player.isMuted = muted
-        if paused { player.pause() } else if player.rate == 0 { player.play() }
+        if player.rate == 0 { player.play() }
     }
 
     static func dismantleUIView(_ view: PlayerView, coordinator: Coordinator) {

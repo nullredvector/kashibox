@@ -4102,16 +4102,17 @@
     // Send the video in view to the TV: first in the column, above mute (shown only while a TV app or a Cast session is there)
     const tvBtn = document.createElement('button');
     tvBtn.className = 'player-ctrl-btn player-tv-btn sp-tv-send';
-    tvBtn.title = 'Show on the TV';
+    tvBtn.title = 'Show on the TV (hold to clear it)';
     tvBtn.innerHTML = CAST_SVG;
     tvBtn.style.display = castActive() ? '' : 'none';
-    tvBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      if (!currentItem) return;
-      castItem(currentItem.videoPath || getVideoPath(currentItem.coverSrc), currentItem.coverSrc);
-      tvBtn.classList.add('sp-sent');
-      setTimeout(() => tvBtn.classList.remove('sp-sent'), 500);
-    });
+    starGesture(tvBtn,
+      () => {
+        if (!currentItem) return;
+        castItem(currentItem.videoPath || getVideoPath(currentItem.coverSrc), currentItem.coverSrc);
+        tvBtn.classList.add('sp-sent');
+        setTimeout(() => tvBtn.classList.remove('sp-sent'), 500);
+      },
+      () => { tvSend({ action: 'clear' }); spToast('TV cleared'); });
     rightCenter.insertBefore(tvBtn, rightCenter.firstChild);
     ctrlLayer.appendChild(rightCenter);
 
@@ -7048,9 +7049,8 @@ render();
   function updateCastButton() {
     const btn = document.getElementById('sp-cast-nav-btn');
     if (!btn) return;
-    btn.style.display = (castAvailable || tvOnline) ? '' : 'none';
-    btn.classList.toggle('sp-cast-on', castConnected || tvOnline);
-    btn.title = tvOnline && !castSession ? 'Clear the TV' : 'Cast to TV';
+    btn.style.display = castAvailable ? '' : 'none';   // only for a real Chromecast; the TV app has its own button in the rail
+    btn.classList.toggle('sp-cast-on', castConnected);
   }
   function pollTv() {
     fetch('/api/tv/status', { cache: 'no-store' }).then(r => r.json()).then(st => {
@@ -7181,7 +7181,6 @@ render();
     btn.innerHTML = CAST_SVG + '<span>Cast</span>';
     btn.style.display = 'none'; // hidden until SDK reports devices nearby
     btn.addEventListener('click', () => {
-      if (tvOnline && !castSession) { tvSend({ action: 'clear' }); return; }
       if (!castReady) return;
       if (isCap) {
         if (castSession) capCast.endSession().catch(() => {});
