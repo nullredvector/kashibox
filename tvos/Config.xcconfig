@@ -1,0 +1,2 @@
+// Optional: your own signing team lives in Local.xcconfig (not committed): DEVELOPMENT_TEAM = XXXXXXXXXX
+#include? "Local.xcconfig"
