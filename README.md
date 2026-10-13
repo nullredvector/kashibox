@@ -15,7 +15,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 ## Features
 
 ### Pages
-- **Stars** (the default page): star videos, put them into groups, give them a number ("numeric tags", renamable in Settings), and filter by *All tagged*, *All stars*, *Super stars*, *Untagged* or *Disappeared*.
+- **Stars** (the default page): star videos, put them into groups, give them a number ("numeric tags": name and range are set in Settings), and filter by *All tagged*, *All stars*, *Super stars*, *Untagged* or *Disappeared*.
 - **Super stars:** press and hold any star button (about half a second) to turn it into a rainbow sparkle star. Every other video by that creator becomes a blue sparkle super star too. Super stars have their own category under *All stars*, and the account is highlighted and sorted to the top of the Following page. Tap a super star to remove it, hold it again to make it a normal star.
 - **Likes** and **Favorites:** your downloaded collections, with *Current* (what is still listed), *Disappeared* (downloaded but no longer listed) and *All*, plus search.
 - **Following:** the accounts you follow, with avatar, name, follower count and how many of their videos you have. Show only the accounts with videos, or everyone. Click an account to open its videos. It needs a `db_following.js` in the archive; ttpull does not download followed accounts, so for an archive it builds this page just says there is no Following data.
