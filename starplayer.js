@@ -51,7 +51,8 @@
     catch (_) { return {}; }
   }
 
-  function saveStarsLocal()  { try { localStorage.setItem(STARS_KEY,  JSON.stringify(stars));  } catch (_) {} }
+  let _starsStamp = 0;   // bumped on every save of the stars, so cached answers about super stars can be refreshed
+  function saveStarsLocal()  { _starsStamp++; try { localStorage.setItem(STARS_KEY,  JSON.stringify(stars));  } catch (_) {} }
   function saveGroupsLocal() { try { localStorage.setItem(GROUPS_KEY, JSON.stringify(groups)); } catch (_) {} }
   function saveLevelsLocal() { try { localStorage.setItem(LEVELS_KEY, JSON.stringify(levels)); } catch (_) {} }
 
@@ -535,7 +536,33 @@
     '<path fill="#4fc3f7" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
     '<path fill="#e6f7ff" d="M20 .6l.8 2L22.8 3.4l-2 .8L20 6.2l-.8-2-2-.8 2-.8z"/>' +
     '<path fill="#e6f7ff" d="M4.3 14.8l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z"/></svg>';
-  const isSuperStar = id => Boolean(stars[id] && stars[id].super);
+  // The star you actually picked is the same sparkle star in rainbow colours (each copy needs its own gradient id)
+  let _gradN = 0;
+  const ORIGIN_STAR_SVG = (size) => {
+    const g = 'spg' + (++_gradN);
+    return '<svg viewBox="0 0 24 24"' + (size ? ' width="' + size + '" height="' + size + '"' : '') + ' aria-hidden="true">' +
+      '<defs><linearGradient id="' + g + '" x1="0" y1="0" x2="1" y2="1">' +
+      '<stop offset="0" stop-color="#ff5f6d"/><stop offset=".28" stop-color="#ffc371"/><stop offset=".52" stop-color="#7bed9f"/>' +
+      '<stop offset=".76" stop-color="#4fc3f7"/><stop offset="1" stop-color="#b388ff"/></linearGradient></defs>' +
+      '<path fill="url(#' + g + ')" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' +
+      '<path fill="#fff6b8" d="M20 .6l.8 2L22.8 3.4l-2 .8L20 6.2l-.8-2-2-.8 2-.8z"/>' +
+      '<path fill="#c8f7ff" d="M4.3 14.8l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z"/></svg>';
+  };
+
+  // 'origin' = a video you super-starred; 'inherited' = any other video by an account that has one; otherwise null
+  let _superMemo = null;
+  function superAuthorSet() {
+    if (_superMemo && _superMemo.stamp === _starsStamp && _superMemo.db === _dbCache) return _superMemo.set;
+    const set = new Set(), d = _dbCache;
+    if (d) for (const id in stars) { if (stars[id].super) { const v = d.videos[id]; if (v) set.add(String(v.authorId)); } }
+    _superMemo = { stamp: _starsStamp, db: _dbCache, set };
+    return set;
+  }
+  function superState(id) {
+    if (stars[id] && stars[id].super) return 'origin';
+    const d = _dbCache, v = d && d.videos[id];
+    return v && superAuthorSet().has(String(v.authorId)) ? 'inherited' : null;
+  }
 
   // Tap and long-press on a star button: the tap does onTap, holding for about half a second does onHold
   function starGesture(btn, onTap, onHold) {
@@ -572,15 +599,19 @@
     if (listTabKind === 'following') renderListView();   // the highlighted accounts may have changed
   }
 
-  // Show the right glyph and colour on a star button: plain (hollow/filled), gold when starred, blue sparkle when super
+  // Show the right glyph and colour on a star button: plain (hollow/filled), gold when starred, blue sparkle star on every
+  // video of a super-star account, rainbow sparkle star on the video that was actually picked
   function paintStarBtn(btn, id, hollowWhenOff) {
-    const st = stars[id], sup = Boolean(st && st.super);
+    const st = stars[id], state = superState(id);
     btn.classList.toggle('active', Boolean(st));
     btn.classList.toggle('on', Boolean(st));
-    btn.classList.toggle('super', sup);
-    if (sup) { if (!btn._sparkle) { btn.innerHTML = SUPER_STAR_SVG(); btn._sparkle = true; } }
-    else { btn._sparkle = false; btn.textContent = st ? '★' : (hollowWhenOff ? '☆' : '★'); }
-    btn.title = sup ? 'Super star (tap to remove, hold to make it a normal star)'
+    btn.classList.toggle('super', state !== null);
+    btn.classList.toggle('origin', state === 'origin');
+    if (state === 'origin') { if (btn._glyph !== 'origin') { btn.innerHTML = ORIGIN_STAR_SVG(); btn._glyph = 'origin'; } }
+    else if (state === 'inherited') { if (btn._glyph !== 'inherited') { btn.innerHTML = SUPER_STAR_SVG(); btn._glyph = 'inherited'; } }
+    else { btn._glyph = 'text'; btn.textContent = st ? '★' : (hollowWhenOff ? '☆' : '★'); }
+    btn.title = state === 'origin' ? 'Super star: the video you picked (tap to remove the star, hold to make it a normal star)'
+      : state === 'inherited' ? 'Super star: this creator has a super-starred video (hold to make this one a super star too)'
       : st ? 'Remove from Stars (hold for a super star)' : 'Add to Stars (hold for a super star)';
   }
 
@@ -1175,29 +1206,46 @@
     return out;
   }
 
+  // Every downloaded video id (likes, favorites and followed accounts), computed once per database load
+  let _dlSet = null;
+  function downloadedSet() {
+    const d = _dbCache;
+    if (_dlSet && _dlSet.src === d) return _dlSet.set;
+    const set = new Set([...((d.likes && d.likes.downloaded) || []), ...((d.bookmarked && d.bookmarked.downloaded) || [])]);
+    Object.values((d.following && d.following.authorItems) || {}).forEach(it => [...(it.inFolder || []), ...(it.disappeared || [])].forEach(id => set.add(id)));
+    _dlSet = { src: d, set };
+    return set;
+  }
+
+  // Everything in the Super stars category: the videos you picked, then every other downloaded video by those accounts
+  let _superItemsMemo = null;
+  function superVideoItems() {
+    const d = _dbCache;
+    if (_superItemsMemo && _superItemsMemo.stamp === _starsStamp && _superItemsMemo.db === d) return _superItemsMemo.items;
+    const items = Object.entries(stars).filter(([, x]) => x.super).map(([id, x]) => ({ ...x, id }));
+    const authors = d ? superAuthorSet() : null;
+    if (d && authors.size) {
+      const have = new Set(items.map(x => x.id)), dl = downloadedSet();
+      for (const [id, v] of Object.entries(d.videos)) {
+        if (have.has(id) || !authors.has(String(v.authorId)) || !dl.has(id)) continue;
+        const a = d.authors[v.authorId];
+        items.push({ id, coverSrc: coverSrcFor(id), authorName: (a && a.uniqueIds && a.uniqueIds[0]) || '', desc: d.videoDescriptions[id] || '', inherited: true });
+      }
+    }
+    _superItemsMemo = { stamp: _starsStamp, db: d, items };
+    return items;
+  }
+
   // Downloaded videos per author, counted once per database load
   let _followCounts = null;
   function followCounts() {
     const d = _dbCache;
     if (_followCounts && _followCounts.src === d) return _followCounts.map;
-    const have = new Set([...((d.likes && d.likes.downloaded) || []), ...((d.bookmarked && d.bookmarked.downloaded) || [])]);
-    Object.values((d.following && d.following.authorItems) || {}).forEach(it => [...(it.inFolder || []), ...(it.disappeared || [])].forEach(id => have.add(id)));
+    const have = downloadedSet();
     const map = new Map();
     have.forEach(id => { const v = d.videos[id]; if (v) map.set(v.authorId, (map.get(v.authorId) || 0) + 1); });
     _followCounts = { src: d, map };
     return map;
-  }
-
-  // Accounts that have at least one super-starred video
-  function superAuthorIds() {
-    const d = _dbCache, out = new Set();
-    if (!d) return out;
-    Object.keys(stars).forEach(id => {
-      if (!stars[id].super) return;
-      const v = d.videos[id];
-      if (v) out.add(String(v.authorId));
-    });
-    return out;
   }
 
   function followedAuthors() {
@@ -1207,7 +1255,7 @@
     const counts = followCounts();
     const ids = new Set((f.officialAuthorList || []).map(x => (x && typeof x === 'object') ? (x.id || x.authorId || x.uid) : x).filter(Boolean).map(String));
     Object.keys(f.authorItems || {}).forEach(id => ids.add(id));
-    const supers = superAuthorIds();
+    const supers = superAuthorSet();
     return [...ids].map(id => {
       const a = d.authors[id] || {};
       return { id, name: (a.uniqueIds && a.uniqueIds[0]) || '', nick: (a.nicknames && a.nicknames[0]) || '', followers: a.followerCount || 0, videos: counts.get(id) || 0, super: supers.has(id) };
@@ -1443,7 +1491,7 @@
 
   const GEAR_PATH = '<path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>';
   const SETTINGS_KEY = 'sp_settings';
-  let settings = { profileUrl: '' };
+  let settings = { profileUrl: '', debugBanner: false };
   let settingsTabActive = false;
   let settingsViewEl = null;
 
@@ -1454,6 +1502,7 @@
       Object.assign(settings, d.settings);
       try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
       if (typeof syncAuthorTabs === 'function') syncAuthorTabs();
+      syncDebugBanner();
       if (settingsTabActive) renderSettingsView();
     }).catch(() => {});
   })();
@@ -1634,6 +1683,16 @@
 
     // ── this device ──
     const dev = section('This device');
+    const dbgRow = document.createElement('label');
+    dbgRow.className = 'set-check';
+    const dbg = document.createElement('input');
+    dbg.type = 'checkbox';
+    dbg.checked = Boolean(settings.debugBanner);
+    const dbgText = document.createElement('span');
+    dbgText.textContent = 'Show the debug banner at startup (app and Cast diagnostics, visible for 20 seconds)';
+    dbg.addEventListener('change', () => { saveSettings({ debugBanner: dbg.checked }); syncDebugBanner(true); });
+    dbgRow.append(dbg, dbgText);
+    dev.appendChild(dbgRow);
     const info = document.createElement('button');
     info.className = 'set-btn';
     info.textContent = 'Show device info';
@@ -1785,7 +1844,7 @@
     sidebar.appendChild(allItem);
 
     // ── Super stars (a star you long-pressed) ───────────────────────────────
-    const superCount = Object.values(stars).filter(x => x.super).length;
+    const superCount = superVideoItems().length;
     const superItem = makeSidebarItem('__super__', '\u2726 Super stars', superCount);
     superItem.classList.add('stars-super-item');
     superItem.addEventListener('click', () => { activeView = '__super__'; activeGroupIds.clear(); renderStarsView(); });
@@ -2127,7 +2186,7 @@
       }
     } else if (activeView === '__super__') {
       // ── Super stars: every starred video that was long-pressed into a super star ─────────
-      const baseVideos = Object.entries(stars).filter(([, x]) => x.super).map(([key, x]) => ({ ...x, id: key }));
+      const baseVideos = superVideoItems();
       const videosToShow = sortVideos(activeLvl.size > 0 ? baseVideos.filter(x => activeLvl.has(levels[x.id])) : baseVideos, 'stars');
       const countText = `${videosToShow.length} video${videosToShow.length !== 1 ? 's' : ''}`;
       mainHeader.innerHTML = `<span class="stars-main-title">Super stars</span><span class="stars-main-count">${countText}</span>`;
@@ -2136,12 +2195,12 @@
       if (!videosToShow.length) {
         const empty = document.createElement('div');
         empty.id = 'stars-empty';
-        empty.textContent = 'No super stars yet. Press and hold a star to make one.';
+        empty.textContent = 'No super stars yet. Press and hold a star to make one; the rest of that creator\u2019s videos join it.';
         grid.appendChild(empty);
       } else {
         fillGrid(grid, videosToShow, star => {
           const info = getVideoInfo(star.id);
-          return buildStarsGridCard(star, info.authorName || star.authorName || '', info.desc || star.desc || '', null);
+          return buildStarsGridCard(star, info.authorName || star.authorName || '', info.desc || star.desc || '', null, star.inherited);
         });
       }
     } else if (activeView === '__disappeared__') {
@@ -2561,7 +2620,6 @@
   let recentsGridBuilt     = false; // true once grid has been populated
 
   // ── Mobile tab state ───────────────────────────────────────────────────────
-  const MOBILE_TABS = ['home', 'stars', 'recents', 'favs', 'review'];
   let activeMobileTab = 'home';    // the phone app opens on the Home feed (see showDefaultStarsView)
 
   function updateMobileNavActive() {
@@ -2570,7 +2628,7 @@
     });
   }
 
-  function setMobileTab(tab, skipAnim) {
+  function setMobileTab(tab) {
     if (settingsTabActive) hideSettingsView();
     if (listTabKind && tab !== 'favs') hideListView();
     // Leaving the Home feed: remember the list and the video the user was on, so coming back resumes there
@@ -2585,8 +2643,6 @@
     if (activeAuthorId) hideAuthorView(false);
     if (autotagTabActive && tab !== 'review') hideAutotagView();
     if (tab !== 'stars') releaseGridPreviews(starsViewEl);
-    const oldIdx = MOBILE_TABS.indexOf(activeMobileTab);
-    const newIdx = MOBILE_TABS.indexOf(tab);
     activeMobileTab = tab;
     updateMobileNavActive();
     if (tab === 'home') {
@@ -2613,9 +2669,6 @@
       if (playerOpen) closePlayer();
       hideRecentsView();
       showListTab(listTabKind || 'bookmarked');
-    }
-    if (!skipAnim) {
-      requestAnimationFrame(() => applySwipeEnter(getSwipeViewEl(), newIdx > oldIdx ? 'left' : 'right'));
     }
   }
 
@@ -2771,8 +2824,6 @@
     document.body.appendChild(nav);
   }
 
-  const TAB_LABELS = { home: 'Home', stars: 'Stars', recents: 'Recents', favs: 'Library', review: 'Review' };
-
   function getSwipeViewEl() {
     if (activeMobileTab === 'home')    return playerViewEl;
     if (activeMobileTab === 'stars')   return document.getElementById('stars-view');
@@ -2780,60 +2831,6 @@
     if (activeMobileTab === 'review')  return autotagViewEl;
     if (activeMobileTab === 'favs') return listViewEl;
     return document.querySelector('main');
-  }
-
-  function applySwipeEnter(el, dir) {
-    if (!el) return;
-    const cls = dir === 'left' ? 'sp-enter-from-right' : 'sp-enter-from-left';
-    el.classList.remove('sp-enter-from-right', 'sp-enter-from-left');
-    void el.offsetWidth;
-    el.classList.add(cls);
-    el.addEventListener('animationend', () => el.classList.remove(cls), { once: true });
-  }
-
-  function doSwipe(newTab, dir, outEl) {
-    if (outEl) {
-      outEl.style.transition = 'transform 0.22s ease';
-      outEl.style.transform = `translateX(${dir === 'left' ? -110 : 110}vw)`;
-      setTimeout(() => {
-        outEl.style.transition = '';
-        outEl.style.transform = '';
-        setMobileTab(newTab, true);
-        requestAnimationFrame(() => applySwipeEnter(getSwipeViewEl(), dir));
-      }, 220);
-    } else {
-      setMobileTab(newTab, true);
-      requestAnimationFrame(() => applySwipeEnter(getSwipeViewEl(), dir));
-    }
-  }
-
-  function showSwipeHint(dx, fromIdx) {
-    let hint = document.getElementById('sp-swipe-hint');
-    if (!hint) return;
-    const isNext = dx < 0;
-    const targetIdx = fromIdx + (isNext ? 1 : -1);
-    if (targetIdx < 0 || targetIdx >= MOBILE_TABS.length) {
-      hint.style.opacity = '0'; return;
-    }
-    hint.querySelector('.sp-sh-label').textContent = TAB_LABELS[MOBILE_TABS[targetIdx]];
-    hint.querySelector('.sp-sh-arrow').textContent = isNext ? '›' : '‹';
-    hint.style.left   = isNext ? 'auto' : '0';
-    hint.style.right  = isNext ? '0'    : 'auto';
-    hint.style.borderRadius = isNext ? '10px 0 0 10px' : '0 10px 10px 0';
-    hint.style.opacity = String(Math.min(1, Math.abs(dx) / 80));
-  }
-
-  function hideSwipeHint() {
-    const hint = document.getElementById('sp-swipe-hint');
-    if (hint) { hint.style.opacity = '0'; }
-  }
-
-  function initSwipeHint() {
-    if (document.getElementById('sp-swipe-hint')) return;
-    const hint = document.createElement('div');
-    hint.id = 'sp-swipe-hint';
-    hint.innerHTML = '<span class="sp-sh-arrow"></span><span class="sp-sh-label"></span>';
-    document.body.appendChild(hint);
   }
 
   // The video in the phone feed that is currently showing, and who posted it
@@ -2944,7 +2941,7 @@
     closePlayer();
     playerReturnTab = null;
     restoreHomeStash();
-    if (rt && rt !== '__author__') setMobileTab(rt, true);
+    if (rt && rt !== '__author__') setMobileTab(rt);
   }
 
   // While a sideways pull is under way the feed must not scroll up or down
@@ -2962,11 +2959,11 @@
   }
 
   function setupMobileSwipe() {
-    initSwipeHint();
     // _ctx: where the touch started. 'author' = a username page (drag right = pull it off),
-    // 'feed' = the video feed (drag left = pull that user's page over), 'tabs' = the usual tab swipes,
-    // 'none' = controls such as the size slider or the seek bar, which must not be mistaken for a swipe.
-    let _tsx = 0, _tsy = 0, _tt = 0, _swipeDir = null, _swiping = false, _outEl = null, _ctx = 'tabs', _pull = null, _under = null;
+    // 'feed' = the video feed (drag left = pull that user's page over), 'pr' = a video opened from a grid,
+    // 'none' = everything else: other pages switch only with the bottom buttons, and controls such as the size slider,
+    // the seek bar or the review cards keep their own gestures.
+    let _tsx = 0, _tsy = 0, _tt = 0, _swipeDir = null, _swiping = false, _ctx = 'none', _pull = null, _under = null;
 
     document.addEventListener('touchstart', e => {
       _tsx = e.touches[0].clientX;
@@ -2977,8 +2974,7 @@
       if (t.closest && t.closest('input, .grid-controls, select, textarea, .sp-seek, .sp-tag-btn, .sp-sheet, .sp-sheet-back, .sp-radial, #settings-view')) _ctx = 'none';
       else if (authorViewOpen() && authorViewEl.contains(t)) _ctx = 'author';
       else if (playerViewEl && playerViewEl.style.display !== 'none' && playerViewEl.contains(t)) _ctx = playerReturnTab ? 'pr' : 'feed';
-      else _ctx = 'tabs';
-      _outEl = _ctx === 'author' ? authorViewEl : getSwipeViewEl();
+      else _ctx = 'none';
     }, { passive: true });
 
     document.addEventListener('touchmove', e => {
@@ -3015,16 +3011,10 @@
         dragAuthorTo(Math.max(0, Math.min(W, W + dx)));
         return;
       }
-      const idx = MOBILE_TABS.indexOf(activeMobileTab);
-      if ((dx < 0 && idx >= MOBILE_TABS.length - 1) || (dx > 0 && idx <= 0)) return;
-      _swiping = true;
-      if (_outEl) _outEl.style.transform = `translateX(${dx * 0.35}px)`;
-      showSwipeHint(dx, idx);
     }, { passive: false });
 
     function endTouch(dx, dy) {
       lockFeed(false);
-      hideSwipeHint();
       if (_ctx === 'none') return;
       const W = window.innerWidth || 1;
       const vel = dx / Math.max(1, Date.now() - _tt);
@@ -3052,16 +3042,6 @@
         }
         return;
       }
-      if (!_swiping) return;
-      if (Math.abs(dx) < 60 || Math.abs(dx) <= Math.abs(dy)) {
-        // snap back
-        if (_outEl) { _outEl.style.transition = 'transform 0.2s ease'; _outEl.style.transform = ''; setTimeout(() => { if (_outEl) _outEl.style.transition = ''; }, 200); }
-        return;
-      }
-      const idx = MOBILE_TABS.indexOf(activeMobileTab);
-      const newTab = dx < 0 ? MOBILE_TABS[idx + 1] : MOBILE_TABS[idx - 1];
-      if (!newTab) { if (_outEl) { _outEl.style.transform = ''; } return; }
-      doSwipe(newTab, dx < 0 ? 'left' : 'right', _outEl);
     }
     document.addEventListener('touchend', e => {
       endTouch(e.changedTouches[0].clientX - _tsx, e.changedTouches[0].clientY - _tsy);
@@ -3646,6 +3626,9 @@
   }
 
   // Builds the tag button plus its sheet and radial. host = the player view; getVideoId() = the video on screen.
+  const THUMB_UP_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>';
+  const THUMB_DOWN_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>';
+
   function buildTagControls(host, getVideoId) {
     const btn = document.createElement('button');
     btn.className = 'player-ctrl-btn player-tag-btn sp-tag-btn';
@@ -3849,7 +3832,7 @@
     const thumbUpBtn = document.createElement('button');
     thumbUpBtn.className = 'player-ctrl-btn player-thumb-btn player-thumb-up';
     thumbUpBtn.title = 'Add to Liked';
-    thumbUpBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>';
+    thumbUpBtn.innerHTML = THUMB_UP_SVG;;
     thumbUpBtn.addEventListener('click', e => {
       e.stopPropagation();
       if (!currentItem) return;
@@ -3887,7 +3870,7 @@
     const thumbDownBtn = document.createElement('button');
     thumbDownBtn.className = 'player-ctrl-btn player-thumb-btn player-thumb-down';
     thumbDownBtn.title = 'Add to Disliked';
-    thumbDownBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>';
+    thumbDownBtn.innerHTML = THUMB_DOWN_SVG;;
     thumbDownBtn.addEventListener('click', e => {
       e.stopPropagation();
       if (!currentItem) return;
@@ -4467,6 +4450,7 @@
     const vidOffset = startIdx  != null ? startIdx  : (playerColumnOffsets[0] || 0);
     // Snapshot current in-memory state so pop-out starts with fresh data
     const initStars  = safeJson(stars);
+    const initInh    = safeJson(vidList.filter(v => superState(v.id) === 'inherited').map(v => v.id));
     const initGroups = safeJson(groups);
     const initLevels = safeJson(levels);
     const apiOrigin  = location.origin;
@@ -4689,7 +4673,9 @@ function render(){
   // ★ Star
   const sb=document.createElement('button');
   const SSVG='<svg viewBox="0 0 24 24" width="24" height="24"><path fill="#4fc3f7" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/><path fill="#e6f7ff" d="M20 .6l.8 2L22.8 3.4l-2 .8L20 6.2l-.8-2-2-.8 2-.8z"/><path fill="#e6f7ff" d="M4.3 14.8l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z"/></svg>';
-  const paintStar=()=>{const st=ls()[item.id]; sb.className='b'+(st?' on':'')+(st&&st.super?' sup':''); if(st&&st.super)sb.innerHTML=SSVG; else sb.textContent='★'; sb.title=st&&st.super?'Super star (hold to make it a normal star)':'Star (hold for a super star)';};
+  const OSVG='<svg viewBox="0 0 24 24" width="24" height="24"><defs><linearGradient id="og" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff5f6d"/><stop offset=".28" stop-color="#ffc371"/><stop offset=".52" stop-color="#7bed9f"/><stop offset=".76" stop-color="#4fc3f7"/><stop offset="1" stop-color="#b388ff"/></linearGradient></defs><path fill="url(#og)" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/><path fill="#fff6b8" d="M20 .6l.8 2L22.8 3.4l-2 .8L20 6.2l-.8-2-2-.8 2-.8z"/><path fill="#c8f7ff" d="M4.3 14.8l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z"/></svg>';
+  const INH=new Set(${initInh});
+  const paintStar=()=>{const st=ls()[item.id]; const org=Boolean(st&&st.super); const inh=!org&&INH.has(item.id); sb.className='b'+(st?' on':'')+((org||inh)?' sup':''); if(org)sb.innerHTML=OSVG; else if(inh)sb.innerHTML=SSVG; else sb.textContent='★'; sb.title=org?'Super star (hold to make it a normal star)':inh?'Super star account (hold to make this video a super star too)':'Star (hold for a super star)';};
   const addStar=s=>{s[item.id]={id:item.id,coverSrc:item.coverSrc,authorName:item.authorName||'',desc:item.desc||''};};
   paintStar();
   let starHold=null, starHeld=false;
@@ -4949,6 +4935,7 @@ render();
     const title = document.createElement('span');
     title.className = 'stars-main-title';
     title.textContent = '@' + author.name;
+    if (superAuthorSet().has(String(activeAuthorId))) { const sp = document.createElement('span'); sp.className = 'author-super'; sp.title = 'Super star account'; sp.innerHTML = SUPER_STAR_SVG(18); title.appendChild(sp); }
     const count = document.createElement('span');
     count.className = 'stars-main-count';
     count.textContent = `${videos.length} video${videos.length !== 1 ? 's' : ''}`;
@@ -5684,6 +5671,60 @@ render();
   // ── Phone review: swipeable full-screen cards (like the Home feed) ──
   // Swipe right = accept, left = reject, up = not sure. The same three buttons stay overlaid at the bottom. The current
   // card autoplays (muted until you unmute). Decisions go through atDecide, exactly like the grid buttons.
+  // The button column down the right edge of a full-screen video (the "action rail"): mute, like, dislike, star, braces,
+  // level, tag. getItem() returns {id, coverSrc} for the video on screen; refresh() repaints every button for it.
+  function buildActionRail(host, getItem, muteEl) {
+    const rail = document.createElement('div');
+    rail.className = 'sp-rail';
+    const mk = (cls, title, html) => {
+      const b = document.createElement('button');
+      b.className = 'sp-rail-btn ' + cls; b.title = title;
+      if (html) b.innerHTML = html;
+      return b;
+    };
+    const up = mk('rail-up', 'Add to Liked', THUMB_UP_SVG);
+    const down = mk('rail-down', 'Add to Disliked', THUMB_DOWN_SVG);
+    const star = mk('rail-star', 'Star'); star.textContent = '★';
+    const lvl = mk('rail-lvl', 'Set level'); lvl.textContent = 'lvl';
+    const braces = makeBracesBtn('sp-rail-btn', null, 26);
+    const react = (name, other) => {
+      const it = getItem(); if (!it) return;
+      const now = toggleQuickGroup(it.id, name);
+      if (now) {
+        const og = groups.find(x => x.name === other);
+        if (og && og.videoIds.includes(it.id)) { og.videoIds = og.videoIds.filter(v => v !== it.id); saveGroups(); }
+      }
+      refresh();
+    };
+    up.addEventListener('click', e => { e.stopPropagation(); react('liked', 'disliked'); });
+    down.addEventListener('click', e => { e.stopPropagation(); react('disliked', 'liked'); });
+    starGesture(star,
+      () => { const it = getItem(); if (!it) return; toggleStar(it.id, it.coverSrc); refresh(); },
+      () => { const it = getItem(); if (!it) return; const now = toggleSuperStar(it.id, it.coverSrc); refresh(); spToast(now ? 'Super star' : 'Normal star'); });
+    lvl.addEventListener('click', e => {
+      e.stopPropagation();
+      const it = getItem(); if (!it) return;
+      showLevelPicker(lvl, it.id, () => refresh());
+    });
+    const tagUI = buildTagControls(host, () => { const it = getItem(); return it && it.id; });
+    tagUI.btn.className = 'sp-rail-btn rail-tag sp-tag-btn';
+    if (muteEl) rail.appendChild(muteEl);
+    rail.append(up, down, star, braces, lvl, tagUI.btn);
+    function refresh() {
+      const it = getItem();
+      if (!it) return;
+      up.classList.toggle('active', inQuickGroup(it.id, 'liked'));
+      down.classList.toggle('active', inQuickGroup(it.id, 'disliked'));
+      paintStarBtn(star, it.id, false);
+      braces.dataset.vid = it.id;
+      if (braces._refresh) braces._refresh();
+      lvl.textContent = levels[it.id] != null ? String(levels[it.id]) : 'lvl';
+      lvl.classList.toggle('active', levels[it.id] != null);
+      tagUI.refresh();
+    }
+    return { rail, refresh, tagUI };
+  }
+
   function buildSwipeStack(list) {
     const queue = list.slice();
     const root = document.createElement('div');
@@ -5694,6 +5735,8 @@ render();
     const toast = document.createElement('div'); toast.className = 'at-sw-toast';
     const btns = document.createElement('div'); btns.className = 'at-sw-btns';
     let cur = null, busy = false, undoItem = null, toastTimer = null, lastDecide = Promise.resolve();
+    const railItem = () => cur ? { id: cur.dataset.id, coverSrc: coverSrcFor(cur.dataset.id) } : null;
+    let railUI = null;
 
     const dispose = card => {
       if (!card) return;
@@ -5825,14 +5868,15 @@ render();
       if (!queue.length) {
         const d = document.createElement('div'); d.className = 'at-sw-done';
         d.textContent = 'All reviewed for "' + groupDisplayName(atTag) + '". Nothing pending.';
-        stack.appendChild(d); btns.style.display = 'none'; muteBtn.style.display = 'none';
+        stack.appendChild(d); btns.style.display = 'none'; if (railUI) railUI.rail.style.display = 'none';
         return;
       }
-      btns.style.display = ''; muteBtn.style.display = '';
+      btns.style.display = ''; if (railUI) railUI.rail.style.display = '';
       if (queue[1]) stack.appendChild(makeCard(queue[1], false)).classList.add('behind');
       cur = makeCard(queue[0], true);
       stack.appendChild(cur);
       attachGestures(cur);
+      if (railUI) railUI.refresh();
     }
 
     [['rejected', '✕', 'reject', 'Reject: not ' + atTag], ['unsure', '?', 'unsure', 'Not sure: set aside, no label'], ['accepted', '✓', 'accept', 'Accept: add to "' + atGroupName(atTag) + '"']].forEach(([d, t, c, title]) => {
@@ -5841,7 +5885,9 @@ render();
       b.addEventListener('click', e => { e.stopPropagation(); fly(d); });
       btns.appendChild(b);
     });
-    root.append(stack, count, muteBtn, btns, toast);
+    railUI = buildActionRail(root, railItem, muteBtn);
+    root.append(stack, count, railUI.rail, btns, toast);
+    railUI.refresh();
 
     const onKey = e => {
       if (!root.isConnected || atMode !== 'pending' || e.target.closest('input, select, textarea')) return;
@@ -5856,6 +5902,7 @@ render();
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('visibilitychange', onVis);
       clearTimeout(toastTimer);
+      railUI.tagUI.close();
       dispose(cur);
     };
     mount();
@@ -6763,7 +6810,7 @@ render();
       return;
     }
     defaultViewShown = true;
-    if (isMobilePlayer()) { setMobileTab('home', true); return; }
+    if (isMobilePlayer()) { setMobileTab('home'); return; }
     if (!starsTabActive && !logTabActive && !autotagTabActive && !activeAuthorId) showStarsTab();
   }
 
@@ -6798,15 +6845,22 @@ render();
   })();
   const isCap = !!capCast;
 
-  // DEBUG: show Capacitor status on screen — remove once Cast is working
-  (function() {
-    const d = document.createElement('div');
-    d.style.cssText = 'position:fixed;top:60px;left:0;right:0;z-index:99999;background:rgba(0,0,0,.85);color:#fff;font-size:13px;padding:6px 10px;text-align:center';
+  // Status banner (Capacitor / Cast diagnostics): off unless Settings turns it on; stays up for 20 seconds
+  let debugBannerEl = null;
+  function syncDebugBanner(forceShow) {
+    if (!settings.debugBanner) { if (debugBannerEl) { debugBannerEl.remove(); debugBannerEl = null; } return; }
+    if (debugBannerEl && !forceShow) return;
+    if (debugBannerEl) debugBannerEl.remove();
+    const d = debugBannerEl = document.createElement('div');
+    d.id = 'sp-debug-banner';
+    d.style.cssText = 'position:fixed;top:calc(env(safe-area-inset-top, 0px) + 60px);left:0;right:0;z-index:99999;background:rgba(0,0,0,.85);color:#fff;font-size:13px;padding:6px 10px;text-align:center';
     const plugins = window.Capacitor ? (window.Capacitor.PluginHeaders || []).map(h => h.name).join(',') || '(none)' : 'n/a';
     d.textContent = 'Cap:' + !!(window.Capacitor) + ' Plugin:' + isCap + ' Keys:' + plugins;
-    document.body ? document.body.appendChild(d) : document.addEventListener('DOMContentLoaded', () => document.body.appendChild(d));
-    setTimeout(() => d.remove(), 20000);
-  })();
+    const add = () => { if (debugBannerEl === d) document.body.appendChild(d); };
+    document.body ? add() : document.addEventListener('DOMContentLoaded', add);
+    setTimeout(() => { if (debugBannerEl === d) { d.remove(); debugBannerEl = null; } }, 20000);
+  }
+  syncDebugBanner();
 
   function initCapCast() {
     if (!isCap) return;
@@ -7068,12 +7122,23 @@ render();
       .at-sw-stamp.acc { left: 18px; color: #4caf50; transform: rotate(-12deg); }
       .at-sw-stamp.rej { right: 18px; color: #f44336; transform: rotate(12deg); }
       .at-sw-stamp.uns { left: 50%; top: 90px; color: #ffc107; transform: translateX(-50%); }
-      .at-sw-info { position: absolute; left: 0; right: 0; bottom: 0; padding: 70px 16px 108px; background: linear-gradient(transparent, rgba(0,0,0,.78)); color: #fff; pointer-events: none; }
+      .at-sw-info { position: absolute; left: 0; right: 0; bottom: 0; padding: 70px 72px 108px 16px; background: linear-gradient(transparent, rgba(0,0,0,.78)); color: #fff; pointer-events: none; }
       .at-sw-user { font-weight: 700; font-size: 15px; margin-right: 8px; pointer-events: auto; text-shadow: 0 1px 4px #000; }
       .at-sw-score { font-size: 12px; background: rgba(0,0,0,.6); border-radius: 8px; padding: 1px 7px; }
       .at-sw-cap { margin-top: 4px; font-size: 13px; line-height: 1.35; text-shadow: 0 1px 4px #000; }
       .at-sw-count { position: absolute; top: 10px; left: 12px; font-size: 12px; color: #fff; background: rgba(0,0,0,.55); border-radius: 10px; padding: 2px 9px; z-index: 5; pointer-events: none; }
-      .at-sw-mute { position: absolute; top: 8px; right: 10px; z-index: 6; width: 36px; height: 36px; border-radius: 50%; border: none; background: rgba(0,0,0,.55); color: #fff; display: flex; align-items: center; justify-content: center; }
+      .at-sw-mute { width: 48px; height: 48px; border: none; background: none; color: #fff; display: flex; align-items: center; justify-content: center; padding: 0; }
+      .at-sw-mute svg { width: 28px; height: 28px; }
+      #at-swipe .sp-rail { position: absolute; right: 6px; bottom: 100px; z-index: 6; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+      .sp-rail-btn { width: 48px; height: 48px; padding: 0; border: none; background: none; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 28px; line-height: 1; filter: drop-shadow(0 1px 3px rgba(0,0,0,.7)); }
+      .sp-rail-btn svg { width: 30px; height: 30px; }
+      .sp-rail-btn.rail-lvl { font-size: 15px; font-weight: 700; }
+      .sp-rail-btn.rail-star.active { color: #ffc107; }
+      .sp-rail-btn.rail-star.super { color: #4fc3f7; }
+      .sp-rail-btn.rail-up.active { color: #4caf50; }
+      .sp-rail-btn.rail-down.active { color: #f44336; }
+      .sp-rail-btn.rail-lvl.active { color: #f44336; }
+      .sp-rail-btn.braces-on, .sp-rail-btn.rail-tag.active { color: #4fc3f7; }
       .at-sw-btns { position: absolute; left: 0; right: 0; bottom: 18px; z-index: 6; display: flex; justify-content: center; align-items: center; gap: 22px; pointer-events: none; }
       .at-sw-btn { pointer-events: auto; width: 62px; height: 62px; border-radius: 50%; border: 2px solid; background: rgba(0,0,0,.55); font-size: 28px; line-height: 1; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
       .at-sw-btn.reject { color: #f44336; border-color: #f44336; } .at-sw-btn.accept { color: #4caf50; border-color: #4caf50; }
@@ -7220,6 +7285,7 @@ render();
       .thumb-tool:hover { background: rgba(0,0,0,.9); color: #fff; }
       .thumb-star.on { color: gold; }
       .thumb-star.super, .overlay-star-btn.super, .player-star-btn.super { color: #4fc3f7; }
+      .thumb-star.origin svg, .overlay-star-btn.origin svg, .player-star-btn.origin svg { filter: drop-shadow(0 0 4px rgba(255,255,255,.55)); }
       .thumb-star.super svg, .overlay-star-btn.super svg, .player-star-btn.super svg { filter: drop-shadow(0 0 4px rgba(79,195,247,.7)); }
       .overlay-star-btn.super svg { width: 24px; height: 24px; }
       .thumb-star, .overlay-star-btn, .player-star-btn { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
@@ -7270,6 +7336,9 @@ render();
       .set-preview { margin-top: 2px; font-size: 12px; color: #888; word-break: break-all; }
       .set-facts > div { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 14px; border-bottom: 1px solid #3c3c3c; color: #bbb; }
       .set-facts b { color: #eee; font-weight: 600; }
+      .set-check { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 12px; font-size: 14px; color: #ccc; line-height: 1.4; cursor: pointer; }
+      .set-check input { margin-top: 3px; width: 18px; height: 18px; flex-shrink: 0; }
+      .author-super { display: inline-block; margin-left: 6px; vertical-align: -3px; line-height: 0; }
       .set-btn { background: rgba(255,255,255,.1); border: 1px solid #555; border-radius: 8px; color: #ddd; padding: 8px 14px; font-size: 14px; cursor: pointer; }
       .set-btn:hover { background: rgba(255,255,255,.18); }
       .list-gear { display: none; background: none; border: none; color: #ddd; padding: 2px; cursor: pointer; }
@@ -7726,7 +7795,7 @@ render();
         }
 
         /* ── Prevent text selection during swipes ── */
-        #sp-mobile-nav, #sp-swipe-hint, #player-view, #stars-view,
+        #sp-mobile-nav, #player-view, #stars-view,
         .sp-nav-btn, #stars-mobile-header {
           user-select: none; -webkit-user-select: none;
         }
@@ -7750,24 +7819,6 @@ render();
         }
         .sp-nav-btn.sp-active { color: #fff; border-top-color: #fff; }
         .sp-nav-btn svg { flex-shrink: 0; }
-
-        /* ── Swipe hint indicator ── */
-        #sp-swipe-hint {
-          position: fixed; top: 50%; transform: translateY(-50%);
-          background: rgba(40,40,40,0.85); backdrop-filter: blur(10px);
-          color: #fff; display: flex; align-items: center; gap: 6px;
-          padding: 10px 16px; z-index: 700; pointer-events: none;
-          opacity: 0; font-size: 14px; font-weight: 600;
-          border: 1px solid rgba(255,255,255,0.12);
-          transition: opacity 0.05s;
-        }
-        .sp-sh-arrow { font-size: 22px; line-height: 1; }
-
-        /* ── View entrance animations ── */
-        @keyframes sp-enter-from-right { from { transform: translateX(100vw); } to { transform: translateX(0); } }
-        @keyframes sp-enter-from-left  { from { transform: translateX(-100vw); } to { transform: translateX(0); } }
-        .sp-enter-from-right { animation: sp-enter-from-right 0.25s cubic-bezier(0.4,0,0.2,1) both; }
-        .sp-enter-from-left  { animation: sp-enter-from-left  0.25s cubic-bezier(0.4,0,0.2,1) both; }
 
         /* Push all page content above the fixed bottom nav */
         body { padding-bottom: var(--sp-nav-base, 56px) !important; }
