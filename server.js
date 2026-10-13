@@ -159,7 +159,7 @@ const SHELL_FILE    = path.join(__dirname, 'shell.html');
 const SCRIPT_FILE   = path.join(__dirname, 'starplayer.js');
 const CAST_RCV_FILE = path.join(__dirname, 'cast-receiver.html');
 
-const TV_MAX_TILES = 8;
+const TV_MAX_TILES = 12;
 const tvClients = new Set();
 let tvGrid = [];
 

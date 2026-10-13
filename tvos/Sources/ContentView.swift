@@ -2,18 +2,19 @@ import SwiftUI
 
 private let gap: CGFloat = 16
 private let margin: CGFloat = 40
-private let columns = 4
+private let singleRowMax = 4
 
-/// Up to four panels sit in one row; from the fifth on a second row is added. Tiles are 9:16 and as big as fit.
-private func layoutFor(count: Int, in size: CGSize) -> (rows: Int, tile: CGSize) {
-    let rows = count > columns ? 2 : 1
-    let perRow = rows == 1 ? max(count, 1) : columns
+/// Up to four panels sit in one row; from the fifth on there are two balanced rows (up to six each).
+/// Tiles are 9:16 and as big as fit.
+private func layoutFor(count: Int, in size: CGSize) -> (rows: Int, perRow: Int, tile: CGSize) {
+    let rows = count > singleRowMax ? 2 : 1
+    let perRow = rows == 1 ? max(count, 1) : (count + 1) / 2
     let availW = size.width - 2 * margin
     let availH = size.height - 2 * margin
     let w = (availW - gap * CGFloat(perRow - 1)) / CGFloat(perRow)
     let h = (availH - gap * CGFloat(rows - 1)) / CGFloat(rows)
     let tw = min(w, h * 9 / 16)
-    return (rows, CGSize(width: tw, height: tw * 16 / 9))
+    return (rows, perRow, CGSize(width: tw, height: tw * 16 / 9))
 }
 
 struct ContentView: View {
@@ -36,9 +37,9 @@ struct ContentView: View {
                 Color(white: 0.02)
                 if count == 0 { IdleView(connected: store.connected) }
                 ForEach(Array(panels.enumerated()), id: \.element.id) { index, panel in
-                    let row = index / columns
-                    let col = index % columns
-                    let inRow = min(columns, count - row * columns)
+                    let row = index / layout.perRow
+                    let col = index % layout.perRow
+                    let inRow = row == 0 ? min(count, layout.perRow) : count - layout.perRow
                     let rowW = CGFloat(inRow) * layout.tile.width + CGFloat(inRow - 1) * gap
                     TileView(panel: panel, paused: paused,
                              selected: showSelection && panel.id == selectedID, sound: sound)
