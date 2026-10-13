@@ -15,8 +15,8 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 ## Features
 
 ### Pages
-- **Stars** (the default page): star videos, put them into groups, give them levels, and filter by *All tagged*, *All stars*, *Super stars*, *Untagged* or *Disappeared*.
-- **Super stars:** press and hold any star button (about half a second) to turn it into a blue sparkle star. Super stars have their own category under *All stars*, and the account that posted one is highlighted and sorted to the top of the Following page. Tap a super star to remove it, hold it again to make it a normal star.
+- **Stars** (the default page): star videos, put them into groups, give them a number ("numeric tags": name and range are set in Settings), and filter by *All tagged*, *All stars*, *Super stars*, *Untagged* or *Disappeared*.
+- **Super stars:** press and hold any star button (about half a second) to turn it into a rainbow sparkle star. Every other video by that creator becomes a blue sparkle super star too. Super stars have their own category under *All stars*, and the account is highlighted and sorted to the top of the Following page. Tap a super star to remove it, hold it again to make it a normal star.
 - **Likes** and **Favorites:** your downloaded collections, with *Current* (what is still listed), *Disappeared* (downloaded but no longer listed) and *All*, plus search.
 - **Following:** the accounts you follow, with avatar, name, follower count and how many of their videos you have. Show only the accounts with videos, or everyone. Click an account to open its videos. It needs a `db_following.js` in the archive; ttpull does not download followed accounts, so for an archive it builds this page just says there is no Following data.
 - **Settings** (the gear right of the Player button; on a phone, the gear in the Library header): the profile link, a summary of your archive and a device info box. Settings are saved on the server, so every device shares them.
@@ -28,20 +28,20 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 - **Built for big archives:** grids are filled in chunks as you scroll, so a collection with tens of thousands of videos stays responsive.
 
 ### Browse by creator
-- **Username tabs:** click a creator's name anywhere to open all of their videos in a tab of their own. Double-click a tab to open that account's profile page, if you have set a profile link in Settings (an address with `{username}` in it).
+- **Username tabs:** click a creator's name anywhere to open all of their videos in a tab of their own. Double-click a tab to open that account's profile page, if you have set a profile link in Settings (an address with `{username}` in it). With a profile link set, desktop tabs also check whether the account still exists and show its name in red when it doesn't (including accounts whose profile page says it couldn't find them). Your server makes that check (never the browser) and caches the answer for 12 hours.
 - **Tab sessions:** open tabs are saved automatically as sessions you can restore, rename or delete later.
-- **Player window:** a pop-out player that doesn't disturb the tab you are on, with the same star, tag and level tools.
+- **Player window:** a pop-out player that doesn't disturb the tab you are on, with the same star, tag and number tools.
 
 ### On your phone
 - **Home feed:** a full-screen, edge-to-edge, endless vertical feed that autoplays and loops, with a seek bar above the tab bar and plain white icon buttons. Hold a finger on a video to play it at 2×; double-tap to like.
 - **Ranked or shuffled:** the Home feed is ordered from your stars, tags and how you actually watch (see below), or switch to a plain shuffle by pressing and holding the Home tab and sliding onto your choice. Leave and come back and it resumes on the video you were on.
-- **Gestures:** swipe left on a video to pull that creator's page over the screen, swipe right to push it back. A video opened from a grid is dismissed the same way.
+- **Gestures:** swipe left on a video to pull that creator's page over the screen, swipe right to push it back. A video opened from a grid is dismissed the same way. Pages are switched with the bottom tab bar only.
 - **Tagging while you watch:** tap the tag button for a bottom sheet of your tags (with search and "create"), or press and hold for a radial fan of your most recent tags. Every change has an Undo.
 - **Tab bar:** Home, Stars, Recents, Library (Likes, Favorites and Following) and Review.
 
 ### Smarter feed
 - **Watch log:** the phone feed notes how long each video is watched and whether you skip it quickly. It is stored only in your archive folder.
-- **Ranker:** orders the Home feed from stars, levels, group membership and size, like counts and the watch log, and gives videos you have just seen a cooldown. It only ever sees ids and numbers, never what a tag is called.
+- **Ranker:** orders the Home feed from stars, numbers, group membership and size, like counts and the watch log, and gives videos you have just seen a cooldown. It only ever sees ids and numbers, never what a tag is called.
 - **Review page:** suggestions from the optional **autotagTT** companion (local machine-learning tag suggestions) show up in a Review tab where you accept or reject them.
 
 ### Ops
@@ -80,7 +80,7 @@ The `db_*.js` files are `window.<name>_base64="…"` (gzip-compressed JSON, base
 
 | File in `data/.appdata/` | Written by kashibox |
 | --- | --- |
-| `stars.json` | stars, groups and levels |
+| `stars.json` | stars, groups and numeric tags |
 | `sessions.json` | saved username-tab sessions |
 | `settings.json` | your settings (the profile link) |
 | `watch.json` | the phone feed's watch log |
