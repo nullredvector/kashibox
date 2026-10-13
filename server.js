@@ -158,6 +158,10 @@ const SHELL_FILE    = path.join(__dirname, 'shell.html');
 const SCRIPT_FILE   = path.join(__dirname, 'starplayer.js');
 const CAST_RCV_FILE = path.join(__dirname, 'cast-receiver.html');
 
+const TV_MAX_TILES = 6;
+const tvClients = new Set();
+let tvGrid = [];
+
 http.createServer((req, res) => {
   const pathname = url.parse(req.url).pathname;
 
@@ -390,6 +394,53 @@ http.createServer((req, res) => {
       return;
     }
     res.writeHead(405); res.end('Method not allowed'); return;
+  }
+
+  // ── TV relay: the TV app listens on a stream, phones post what to show ─────
+  if (pathname === '/api/tv/stream' && req.method === 'GET') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive', 'X-Accel-Buffering': 'no',
+    });
+    res.write('retry: 3000\n\n');
+    res.write('data: ' + JSON.stringify({ type: 'state', items: tvGrid }) + '\n\n');
+    tvClients.add(res);
+    const beat = setInterval(() => { try { res.write(': hb\n\n'); } catch (_) {} }, 15000);
+    req.on('close', () => { clearInterval(beat); tvClients.delete(res); });
+    return;
+  }
+  if (pathname === '/api/tv/status' && req.method === 'GET') {
+    const body = JSON.stringify({ tvs: tvClients.size, items: tvGrid.length });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });
+    res.end(body);
+    return;
+  }
+  if (pathname === '/api/tv/cast' && req.method === 'POST') {
+    let chunks = [], size = 0;
+    req.on('data', c => { size += c.length; if (size < 4000) chunks.push(c); });
+    req.on('end', () => {
+      try {
+        if (size >= 4000) throw new Error('too large');
+        const m = JSON.parse(Buffer.concat(chunks).toString());
+        if (m.action === 'clear') {
+          tvGrid = [];
+        } else if (m.action === 'add') {
+          const ok = u => typeof u === 'string' && u.length < 400 && u.startsWith('/') && !u.startsWith('//') && !u.includes('..');
+          if (!ok(m.videoUrl) || (m.coverUrl && !ok(m.coverUrl))) throw new Error('bad url');
+          tvGrid = tvGrid.filter(i => i.videoUrl !== m.videoUrl);
+          tvGrid.push({ id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '' });
+          while (tvGrid.length > TV_MAX_TILES) tvGrid.shift();
+        } else throw new Error('bad action');
+        const line = 'data: ' + JSON.stringify({ type: 'state', items: tvGrid }) + '\n\n';
+        tvClients.forEach(c => { try { c.write(line); } catch (_) {} });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, tvs: tvClients.size }));
+      } catch (_) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+    });
+    return;
   }
 
   // ── Settings API ───────────────────────────────────────────────────────────

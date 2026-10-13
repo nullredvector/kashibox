@@ -17,6 +17,7 @@ Run locally: `ARCHIVE_DIR=/path/to/archive PORT=9560 node server.js`, then open 
 | `server.js` | serves the page, the script, icons, the archive's files (range requests, caching) and `/api/*` |
 | `db_stars.js` | storage for `stars.json` / `sessions.json` / `settings.json` (atomic writes, revisioned saves, a whitelist for settings) |
 | `assets/` | icons and logo (also served by the server) |
+| `tvos/` | the Apple TV app (SwiftUI): shows the grid of videos phones send to it; project generated with `xcodegen generate` from `project.yml` |
 | `Dockerfile`, `entrypoint.sh`, `docker-compose.yml`, `.github/workflows/` | image build and deployment |
 
 ## The archive folder
@@ -33,6 +34,7 @@ Run locally: `ARCHIVE_DIR=/path/to/archive PORT=9560 node server.js`, then open 
 ## Architecture notes
 
 - `starplayer.js` is one IIFE. State lives in module-level `let`s; views are shown/hidden by `showStarsTab`, `showListTab`, `showAuthorTab`, `showLogTab`, `showAutotagTab` (phones also use `setMobileTab`). Keep that pattern and always hide the other views first.
+- TV relay: the Apple TV app holds `GET /api/tv/stream` (server-sent events); phones `POST /api/tv/cast` (`add`/`clear`, paths only, at most 6 tiles) and read `GET /api/tv/status` to know whether a TV is listening. State is in memory only.
 - Phone layout: `isMobilePlayer()` (< 768 px) switches to the bottom nav `#sp-mobile-nav`; the Home feed is a scroll-snap list in `#player-view` built by `renderMobileScrollFeed`.
 - A star is `stars[id]`; a super star is the same entry with `super: true` (long-press on a star button: `starGesture`, `toggleSuperStar`, `paintStarBtn`). `superState(id)` is `'origin'` (the video you picked, rainbow `ORIGIN_STAR_SVG`), `'inherited'` (any other video by a super-star account, blue sparkle) or null; accounts come from the memoized `superAuthorSet()` (invalidated by `_starsStamp`), and `superVideoItems()` feeds the Super stars category. They also drive the Following page highlight. Review cards on phones get the same button column as the Home feed via `buildActionRail`. The pop-out window has its own small copy of the star logic.
 - Settings (`settings.json`, `/api/settings`, the gear page) only accept whitelisted keys (`profileUrl`, `debugBanner`, `numericName`, `numericMin`, `numericMax`; `numRange()`/`numList()` give the choices, `numFilterList()` adds numbers already in use outside the range); the number-per-video feature is user-facing "numeric tags" (`numName()`, never say "level"/"lvl" in the UI; internal names like `levels` stay). `profileUrl`, an `http(s)://` address containing `{username}`. Add a key to `cleanSettings` in `db_stars.js` before using it in the page.
