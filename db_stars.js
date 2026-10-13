@@ -18,6 +18,16 @@ function load() {
   }
 }
 
+// The ids of starred videos, re-read only when stars.json changes (the TV app asks often)
+let _idCache = { mtime: -1, ids: new Set() };
+function starredIds() {
+  try {
+    const st = fs.statSync(STARS_FILE);
+    if (st.mtimeMs !== _idCache.mtime) _idCache = { mtime: st.mtimeMs, ids: new Set(Object.keys(load().stars)) };
+  } catch (_) { _idCache = { mtime: -1, ids: new Set() }; }
+  return _idCache.ids;
+}
+
 // Revision of stars.json = hash of its bytes. A save must name the revision it was based on, so a window holding an
 // out-of-date copy can never silently overwrite newer changes (the server refuses, and the browser merges instead).
 function currentRev() {
@@ -402,4 +412,4 @@ function saveSchedule(d) {
   return { code: 200, ok: true };
 }
 
-module.exports = { loadSettings, saveSettings, load, loadWithRev, saveGuarded, currentRev, save, loadSessions, saveSessions, loadAutotag, recordFeedback, loadAiTags, loadTagsConfig, saveTagsConfig, loadWatch, mergeWatch, runStatus, requestRun, saveSchedule, requestNotifyTest, saveFramesConfig };
+module.exports = { starredIds, loadSettings, saveSettings, load, loadWithRev, saveGuarded, currentRev, save, loadSessions, saveSessions, loadAutotag, recordFeedback, loadAiTags, loadTagsConfig, saveTagsConfig, loadWatch, mergeWatch, runStatus, requestRun, saveSchedule, requestNotifyTest, saveFramesConfig };

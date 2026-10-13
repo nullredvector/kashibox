@@ -1,0 +1,12 @@
+{
+  "appId": "net.fexel.kashibox",
+  "appName": "Kashibox",
+  "webDir": "www",
+  "server": {
+    "url": "https://kashibox.fexel.net",
+    "cleartext": false
+  },
+  "ios": {
+    "scheme": "kashibox"
+  }
+}

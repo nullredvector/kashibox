@@ -468,6 +468,77 @@ http.createServer((req, res) => {
     res.end(body);
     return;
   }
+  const tvJson = (code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
+  const tvBroadcast = () => {
+    const line = 'data: ' + JSON.stringify({ type: 'state', items: tvGrid }) + '\n\n';
+    tvClients.forEach(c => { try { c.write(line); } catch (_) {} });
+  };
+  // Same-origin JSON only (the TV app sends no Origin header; a web page on another site cannot send JSON without a preflight)
+  const tvGuard = () => {
+    const origin = req.headers['origin'];
+    if (origin) {
+      let same = false;
+      try { same = new URL(origin).host === req.headers['host']; } catch (_) {}
+      if (!same) { tvJson(403, { error: 'cross-origin request refused' }); return false; }
+    }
+    if (!/json/i.test(String(req.headers['content-type'] || ''))) { tvJson(415, { error: 'JSON required' }); return false; }
+    return true;
+  };
+  const tvBody = (limit, done) => {
+    if (!tvGuard()) return;
+    let chunks = [], size = 0;
+    req.on('data', c => { size += c.length; if (size < limit) chunks.push(c); });
+    req.on('end', () => { try { if (size >= limit) throw new Error('too large'); done(JSON.parse(Buffer.concat(chunks).toString())); } catch (_) { tvJson(400, { error: 'Invalid request' }); } });
+  };
+
+  // Which of these videos are starred? (?v=/data/Likes/videos/1.mp4&v=...)
+  if (pathname === '/api/tv/starred' && req.method === 'GET') {
+    const ids = dbStars.starredIds();
+    const asked = [].concat(url.parse(req.url, true).query.v || []).slice(0, 40);
+    tvJson(200, { starred: asked.filter(v => { const p = tvAuthor.parseVideoPath(v); return p && ids.has(p.id); }) });
+    return;
+  }
+  // Set a video's star to an explicit state, so a repeated press can never flip it back by accident
+  if (pathname === '/api/tv/star' && req.method === 'POST') {
+    tvBody(2000, m => {
+      const p = tvAuthor.parseVideoPath(m.videoUrl);
+      if (!p || typeof m.starred !== 'boolean') { tvJson(400, { error: 'Invalid request' }); return; }
+      const cur = dbStars.loadWithRev();
+      if (m.starred && !cur.stars[p.id]) cur.stars[p.id] = { id: p.id, coverSrc: p.coverSrc, authorName: '', desc: '' };
+      if (!m.starred) delete cur.stars[p.id];
+      let r;
+      try { r = dbStars.saveGuarded({ stars: cur.stars, groups: cur.groups, levels: cur.levels }, cur.rev); }
+      catch (_) { tvJson(500, { error: 'could not write stars.json' }); return; }
+      tvJson(r.code === 200 ? 200 : 409, { ok: r.code === 200, starred: dbStars.starredIds().has(p.id) });
+    });
+    return;
+  }
+  // The saved tab sessions, newest first, for the TV's picker
+  if (pathname === '/api/tv/sessions' && req.method === 'GET') {
+    const list = dbStars.loadSessions().filter(s => s && s.id && Array.isArray(s.tabs) && s.tabs.length)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 30)
+      .map(s => ({ id: String(s.id), label: String(s.name || s.tabs.map(t => '@' + t.name).join(', ')).slice(0, 90), count: s.tabs.length }));
+    tvJson(200, { sessions: list });
+    return;
+  }
+  // Put one panel per account of a session on the TV (each panel then pages through that account's videos)
+  if (pathname === '/api/tv/session' && req.method === 'POST') {
+    tvBody(2000, m => {
+      const s = dbStars.loadSessions().find(x => x && String(x.id) === String(m.id));
+      if (!s || !Array.isArray(s.tabs)) { tvJson(404, { error: 'No such session' }); return; }
+      const items = [];
+      for (const t of s.tabs) {
+        if (items.length >= TV_MAX_TILES) break;
+        const v = tvAuthor.latestVideo(ARCHIVE_DIR, t);
+        if (v && !items.some(i => i.videoUrl === v.videoUrl)) items.push({ id: crypto.randomBytes(6).toString('hex'), videoUrl: v.videoUrl, coverUrl: v.coverUrl });
+      }
+      if (!items.length) { tvJson(404, { error: 'Nothing downloaded for this session' }); return; }
+      tvGrid = items;
+      tvBroadcast();
+      tvJson(200, { ok: true, count: items.length });
+    });
+    return;
+  }
   if (pathname === '/api/tv/status' && req.method === 'GET') {
     const body = JSON.stringify({ tvs: tvClients.size, items: tvGrid.length });
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });
@@ -475,6 +546,7 @@ http.createServer((req, res) => {
     return;
   }
   if (pathname === '/api/tv/cast' && req.method === 'POST') {
+    if (!tvGuard()) return;
     let chunks = [], size = 0;
     req.on('data', c => { size += c.length; if (size < 4000) chunks.push(c); });
     req.on('end', () => {

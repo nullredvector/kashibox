@@ -17,6 +17,11 @@ final class PanelModel: ObservableObject, Identifiable {
     let id: String
     @Published private(set) var videos: [VideoRef]
     @Published private(set) var index = 0
+    @Published var starred = false
+    /// Counts presses that starred a video (drives the burst animation, which must not play for videos that were already starred).
+    @Published private(set) var starPresses = 0
+    /// Called when the video on show changes, so the star state can be looked up again.
+    var onVideoChange: (() -> Void)?
 
     var current: VideoRef { videos[min(index, videos.count - 1)] }
 
@@ -33,11 +38,25 @@ final class PanelModel: ObservableObject, Identifiable {
         let shown = current
         videos = feed.videos
         index = videos.firstIndex(of: shown) ?? min(feed.index, videos.count - 1)
+        if current != shown { onVideoChange?() }
     }
 
     /// +1 = next video, -1 = previous; wraps around at the ends.
     func step(_ delta: Int) {
         guard videos.count > 1 else { return }
         index = (index + delta + videos.count) % videos.count
+        onVideoChange?()
+    }
+
+    /// Stars or un-stars the video on show: the badge changes at once, the server's answer settles it.
+    func toggleStar() {
+        let video = current
+        let target = !starred
+        starred = target
+        if target { starPresses += 1 }
+        Task {
+            let result = await API.setStar(videoUrl: video.videoUrl, starred: target)
+            if current == video { starred = result ?? !target }
+        }
     }
 }

@@ -1,0 +1,11 @@
+App/build
+App/Pods
+App/output
+DerivedData
+xcuserdata
+
+# Cordova plugins for Capacitor
+capacitor-cordova-ios-plugins
+
+# kashibox keeps these tracked on purpose: App/App/capacitor.config.json lists the Cast plugin (packageClassList),
+# and `npx cap sync` would overwrite it, so do not run cap sync.
