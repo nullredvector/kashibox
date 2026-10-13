@@ -1,0 +1,29 @@
+name: KashiboxTV
+options:
+  bundleIdPrefix: net.fexel
+  deploymentTarget:
+    tvOS: "17.0"
+  createIntermediateGroups: true
+targets:
+  KashiboxTV:
+    type: application
+    platform: tvOS
+    sources: [Sources]
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Kashibox
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.fexel.kashibox.tv
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "3"
+        CODE_SIGN_STYLE: Automatic
+schemes:
+  KashiboxTV:
+    build:
+      targets:
+        KashiboxTV: all
+    run:
+      config: Debug

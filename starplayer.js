@@ -4231,8 +4231,23 @@
         }
       }, { passive: true });
 
+      // Send this video to the TV (shown only while a TV app or a Cast session is there)
+      const tvBtn = document.createElement('button');
+      tvBtn.className = 'sp-tv-send';
+      tvBtn.title = 'Show on the TV';
+      tvBtn.innerHTML = CAST_SVG;
+      tvBtn.style.display = castActive() ? '' : 'none';
+      ['touchstart', 'touchend', 'pointerdown'].forEach(ev => tvBtn.addEventListener(ev, e => e.stopPropagation(), { passive: true }));
+      tvBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        castItem(item.videoPath, item.coverSrc);
+        tvBtn.classList.add('sp-sent');
+        setTimeout(() => tvBtn.classList.remove('sp-sent'), 500);
+      });
+
       slide.appendChild(video);
       slide.appendChild(cover);
+      slide.appendChild(tvBtn);
       feed.appendChild(slide);
       videoEls.push(video);
       if (io) { slide.style.height = feed.clientHeight + 'px'; io.observe(slide); }   // added after the feed is live
@@ -6746,8 +6761,9 @@ render();
       const nav = document.querySelector('nav');
       if (nav) new MutationObserver(injectNavTabs).observe(nav, { childList: true });
       new MutationObserver(() => {
-        if (castSession) document.querySelectorAll('div.cover:not([data-cast-wired])').forEach(wireCastOverlay);
+        if (castActive()) document.querySelectorAll('div.cover:not([data-cast-wired])').forEach(wireCastOverlay);
       }).observe(root, { childList: true, subtree: true });
+      startTvPoll();
       injectNavTabs();
       ensureArchiveDb();
       showDefaultStarsView();
@@ -6787,6 +6803,40 @@ render();
 
   let castReady   = false;
   let castSession = null;
+  let castAvailable = false;
+  let castConnected = false;
+
+  // The kashibox TV app (Apple TV): it listens on the server and the phone posts what to show
+  let tvOnline = false;
+  let tvPollTimer = null;
+  const castActive = () => !!castSession || tvOnline;
+
+  function tvSend(body) {
+    return fetch('/api/tv/cast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(r => r.json()).catch(() => null);
+  }
+  function updateCastButton() {
+    const btn = document.getElementById('sp-cast-nav-btn');
+    if (!btn) return;
+    btn.style.display = (castAvailable || tvOnline) ? '' : 'none';
+    btn.classList.toggle('sp-cast-on', castConnected || tvOnline);
+    btn.title = tvOnline && !castSession ? 'Clear the TV' : 'Cast to TV';
+  }
+  function pollTv() {
+    fetch('/api/tv/status', { cache: 'no-store' }).then(r => r.json()).then(st => {
+      const on = !!(st && st.tvs > 0);
+      if (on === tvOnline) return;
+      tvOnline = on;
+      updateCastButton();
+      refreshCastOverlays();
+    }).catch(() => {});
+  }
+  function startTvPoll() {
+    if (tvPollTimer) return;
+    pollTv();
+    tvPollTimer = setInterval(() => { if (!document.hidden) pollTv(); }, 8000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) pollTv(); });
+  }
 
   // True when running inside the Kashibox iOS app (Capacitor native bridge)
   const capCast = (function() {
@@ -6816,11 +6866,8 @@ render();
       const available = state !== 'noDevicesAvailable';
       castReady   = true;
       castSession = connected ? Plugin : null;
-      const btn = document.getElementById('sp-cast-nav-btn');
-      if (btn) {
-        btn.style.display = available ? '' : 'none';
-        btn.classList.toggle('sp-cast-on', connected);
-      }
+      castAvailable = available; castConnected = connected;
+      updateCastButton();
       refreshCastOverlays();
     };
     Plugin.addListener('castStateChanged', applyState);
@@ -6850,12 +6897,8 @@ render();
     const available = state !== cast.framework.CastState.NO_DEVICES_AVAILABLE;
     const connected = state === cast.framework.CastState.CONNECTED;
 
-    const btn = document.getElementById('sp-cast-nav-btn');
-    if (btn) {
-      btn.style.display = available ? '' : 'none';
-      btn.classList.toggle('sp-cast-on', connected);
-    }
-
+    castAvailable = available; castConnected = connected;
+    updateCastButton();
     refreshCastOverlays();
   }
 
@@ -6866,8 +6909,19 @@ render();
     document.head.appendChild(s);
   }
 
+  function castItem(videoPath, coverSrc) {
+    if (!castSession) {
+      if (tvOnline) tvSend({ action: 'add', videoUrl: '/' + videoPath, coverUrl: '/' + coverSrc });
+      return;
+    }
+    castVideo(coverSrc);
+  }
+
   function castVideo(coverSrc) {
-    if (!castSession) return;
+    if (!castSession) {
+      if (tvOnline) tvSend({ action: 'add', videoUrl: '/' + getVideoPath(coverSrc), coverUrl: '/' + coverSrc });
+      return;
+    }
     const videoUrl = window.location.origin + '/' + getVideoPath(coverSrc);
     const coverUrl = window.location.origin + '/' + coverSrc;
     if (isCap) {
@@ -6890,6 +6944,7 @@ render();
     btn.innerHTML = CAST_SVG + '<span>Cast</span>';
     btn.style.display = 'none'; // hidden until SDK reports devices nearby
     btn.addEventListener('click', () => {
+      if (tvOnline && !castSession) { tvSend({ action: 'clear' }); return; }
       if (!castReady) return;
       if (isCap) {
         if (castSession) capCast.endSession().catch(() => {});
@@ -6901,6 +6956,7 @@ render();
     });
 
     nav.appendChild(btn);
+    startTvPoll();
     if (isCap) initCapCast();
     else       initCastSDK();
   }
@@ -6910,8 +6966,9 @@ render();
     document.querySelectorAll('div.cover').forEach(coverDiv => {
       if (!coverDiv.dataset.castWired) wireCastOverlay(coverDiv);
       const ov = coverDiv.querySelector('.sp-cast-ov');
-      if (ov) ov.style.display = castSession ? '' : 'none';
+      if (ov) ov.style.display = castActive() ? '' : 'none';
     });
+    document.querySelectorAll('.sp-tv-send').forEach(b => { b.style.display = castActive() ? '' : 'none'; });
   }
 
   function wireCastOverlay(coverDiv) {
@@ -6924,7 +6981,7 @@ render();
     btn.className    = 'sp-cast-ov';
     btn.title        = 'Cast to TV';
     btn.innerHTML    = CAST_SVG;
-    btn.style.display = castSession ? '' : 'none';
+    btn.style.display = castActive() ? '' : 'none';
     btn.addEventListener('click', e => {
       e.stopPropagation();
       castVideo(img.getAttribute('src'));
@@ -6944,6 +7001,14 @@ render();
 
 
       /* ── Cast button in mobile nav ── */
+      .sp-tv-send {
+        position: absolute; left: 10px; top: calc(env(safe-area-inset-top, 0px) + 96px); z-index: 12;
+        width: 40px; height: 40px; padding: 8px; border: none; border-radius: 50%;
+        background: rgba(0,0,0,.5); color: #fff; display: flex; align-items: center; justify-content: center;
+        transition: background .15s, transform .1s;
+      }
+      .sp-tv-send svg { width: 22px; height: 22px; display: block; }
+      .sp-tv-send.sp-sent { background: rgba(77,208,225,.8); transform: scale(0.88); }
       #sp-cast-nav-btn svg { width: 22px; height: 22px; display: block; }
       #sp-cast-nav-btn.sp-cast-on { color: #4dd0e1; }
 
