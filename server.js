@@ -21,6 +21,25 @@ const MIME = {
   '.json': 'application/json',
 };
 
+// ── Disk counts ──────────────────────────────────────────────────────────────
+// How many videos are really in each folder (a count of .mp4 files, nothing else), cached for a minute.
+let diskMemo = null;
+async function countMp4(dir) {
+  try { return (await fs.promises.readdir(dir)).filter(f => f.endsWith('.mp4')).length; } catch (_) { return 0; }
+}
+async function diskCounts() {
+  if (diskMemo && Date.now() - diskMemo.at < 60000) return diskMemo.out;
+  const base = path.join(ARCHIVE_DIR, 'data');
+  const out = { likes: await countMp4(path.join(base, 'Likes', 'videos')), favorites: await countMp4(path.join(base, 'Favorites', 'videos')), following: 0 };
+  try {
+    for (const e of await fs.promises.readdir(path.join(base, 'Following'), { withFileTypes: true })) {
+      if (e.isDirectory() && e.name !== 'Avatars') out.following += await countMp4(path.join(base, 'Following', e.name, 'videos'));
+    }
+  } catch (_) {}
+  diskMemo = { at: Date.now(), out };
+  return out;
+}
+
 // ── Account check ───────────────────────────────────────────────────────────
 // Asks the address from the "profile link" setting whether a username still exists. A page that was
 // removed answers 404/410, redirects to a /404 page or serves a page whose own data says the account doesn't exist; anything else that goes wrong (blocked, rate
@@ -145,6 +164,16 @@ http.createServer((req, res) => {
     const send = (code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
     if (!/^[\w.\-]{1,64}$/.test(name)) return send(400, { error: 'bad name' });
     checkProfile(name).then(state => send(200, { state }));
+    return;
+  }
+
+  // ── Files on disk (counts only), to compare with what the database lists ──
+  if (pathname === '/api/archive/disk' && req.method === 'GET') {
+    diskCounts().then(out => {
+      const b = JSON.stringify(out);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) });
+      res.end(b);
+    });
     return;
   }
 

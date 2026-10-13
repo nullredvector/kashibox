@@ -1727,9 +1727,17 @@
       row.append(a, b); list.appendChild(row);
     };
     if (d) {
-      fact('Videos in the database', Object.keys(d.videos).length.toLocaleString());
-      fact('Likes downloaded', (((d.likes && d.likes.downloaded) || []).length).toLocaleString());
-      fact('Favorites downloaded', (((d.bookmarked && d.bookmarked.downloaded) || []).length).toLocaleString());
+      const likesN = ((d.likes && d.likes.downloaded) || []).length, favsN = ((d.bookmarked && d.bookmarked.downloaded) || []).length;
+      fact('Videos the database knows about (downloaded or not)', Object.keys(d.videos).length.toLocaleString());
+      fact('Likes the database lists as downloaded', likesN.toLocaleString());
+      fact('Favorites the database lists as downloaded', favsN.toLocaleString());
+      fetch('/api/archive/disk').then(r => (r.ok ? r.json() : null)).then(k => {
+        if (!k || !settingsTabActive || !list.isConnected) return;
+        const gap = (disk, listed) => (disk === listed ? '' : ' (' + Math.abs(disk - listed).toLocaleString() + (disk > listed ? ' more' : ' fewer') + ' than the database lists)');
+        fact('Video files in the Likes folder', k.likes.toLocaleString() + gap(k.likes, likesN));
+        fact('Video files in the Favorites folder', k.favorites.toLocaleString() + gap(k.favorites, favsN));
+        if (k.following) fact('Video files in the Following folders', k.following.toLocaleString());
+      }).catch(() => {});
       fact('Accounts followed', followedAuthors().length.toLocaleString());
       fact('Stars / groups', `${Object.keys(stars).length.toLocaleString()} / ${groups.length.toLocaleString()}`);
     } else {
