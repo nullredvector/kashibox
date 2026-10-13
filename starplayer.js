@@ -6807,7 +6807,7 @@ render();
       nav.appendChild(tab);
     }
 
-    // autotagTT review tab — just left of Following
+    // autotagTT review tab — just right of Following
     if (!nav.querySelector('.autotag-tab')) {
       const tab = makeNavTab('autotag-tab',
         '<path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/><path d="M3 3h18v2H3z"/>',
@@ -6816,7 +6816,7 @@ render();
       );
       if (autotagTabActive) tab.classList.add('active');
       const fol = nav.querySelector('.following');
-      if (fol) fol.insertAdjacentElement('beforebegin', tab); else nav.appendChild(tab);
+      if (fol) fol.insertAdjacentElement('afterend', tab); else nav.appendChild(tab);
     }
 
     syncAuthorTabs();
