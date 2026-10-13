@@ -46,6 +46,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 
 ### Ops
 - **Live log tab:** a tail of the optional **ttpull** downloader's log.
+- **Downloader schedule:** how often ttpull checks for new videos (default every 30 minutes, or pause it) is set in **Settings → Downloader**. It is stored in ttpull, so it needs a ttpull version that has the `/settings` endpoint.
 - **Safe writes:** your data files are written atomically (temp file, then rename).
 
 ## How it works

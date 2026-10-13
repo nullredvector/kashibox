@@ -277,6 +277,56 @@ http.createServer((req, res) => {
     return;
   }
 
+  // ttpull's check interval (how often it looks for new videos), shown and changed on the Settings page.
+  // GET  /api/ttpull/settings                          → { ok, settings: { syncIntervalMinutes, paused, min, max, default, nextRunAt } }
+  // POST /api/ttpull/settings { syncIntervalMinutes }  → the same, after saving (0 pauses, otherwise whole minutes)
+  // Only that one field is forwarded. Changing it is state-changing, so it has the same same-origin JSON guard as the other POSTs.
+  if (pathname === '/api/ttpull/settings') {
+    const sendJson = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
+    const pick = st => ({
+      syncIntervalMinutes: Number(st.syncIntervalMinutes), paused: Boolean(st.paused),
+      min: Number(st.min), max: Number(st.max), default: Number(st.default),
+      nextRunAt: typeof st.nextRunAt === 'string' ? st.nextRunAt : null,
+    });
+    const callTtpull = (init) => {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 4000);
+      return fetch(TTPULL_URL + '/settings', { ...init, signal: ctl.signal })
+        .then(async r => ({ status: r.status, body: await r.json().catch(() => ({})) }))
+        .finally(() => clearTimeout(timer));
+    };
+    const unreachable = (e, code = 200) => sendJson(code, { ok: false, error: `ttpull unreachable at ${TTPULL_URL} (${e.name === 'AbortError' ? 'timed out' : (e.cause && e.cause.code) || e.message})` });
+
+    if (req.method === 'GET') {
+      callTtpull({}).then(({ status, body }) => {
+        if (status !== 200 || typeof body.syncIntervalMinutes !== 'number') return sendJson(200, { ok: false, error: 'this version of ttpull has no settings yet (update it)' });
+        sendJson(200, { ok: true, settings: pick(body) });
+      }).catch(unreachable);
+      return;
+    }
+    if (req.method !== 'POST') { res.writeHead(405); res.end('Method not allowed'); return; }
+    const origin = req.headers['origin'];
+    let sameOrigin = true;
+    if (origin) { try { sameOrigin = new URL(origin).host === req.headers['host']; } catch (_) { sameOrigin = false; } }
+    if (!sameOrigin) return sendJson(403, { ok: false, error: 'cross-origin request refused' });
+    if (!/^application\/json/i.test(req.headers['content-type'] || '')) return sendJson(415, { ok: false, error: 'JSON required' });
+    let size = 0, chunks = [], tooBig = false;
+    req.on('data', c => { size += c.length; if (size > 1024) tooBig = true; else chunks.push(c); });
+    req.on('end', () => {
+      if (tooBig) return sendJson(413, { ok: false, error: 'body too large' });
+      let d;
+      try { d = JSON.parse(Buffer.concat(chunks).toString()); } catch (_) { return sendJson(400, { ok: false, error: 'Invalid JSON' }); }
+      if (!d || typeof d !== 'object' || Array.isArray(d) || !('syncIntervalMinutes' in d)) return sendJson(400, { ok: false, error: 'syncIntervalMinutes is required' });
+      callTtpull({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ syncIntervalMinutes: d.syncIntervalMinutes }) })
+        .then(({ status, body }) => {
+          if (status === 400) return sendJson(400, { ok: false, error: String(body.error || 'invalid value') });
+          if (status !== 200 || typeof body.syncIntervalMinutes !== 'number') return sendJson(502, { ok: false, error: 'ttpull did not accept the change' });
+          sendJson(200, { ok: true, settings: pick(body) });
+        }).catch(e => unreachable(e, 502));
+    });
+    return;
+  }
+
   // ── autotagTT review API ───────────────────────────────────────────────────
   // GET  /api/autotag?tag=braces                      → pending suggestions + recorded decisions
   // POST /api/autotag/feedback {tag,id,decision,change?} → records one explicit decision

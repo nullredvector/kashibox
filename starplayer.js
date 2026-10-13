@@ -1569,6 +1569,7 @@
       if (main && !mobile) main.parentNode.insertBefore(settingsViewEl, main); else document.body.appendChild(settingsViewEl);
     }
     settingsViewEl.style.display = 'flex';
+    _dlCfg = null;            // re-read ttpull's setting every time the page is opened
     renderSettingsView();
     syncNavActive();
     archiveDbPromise().then(() => { if (settingsTabActive) renderSettingsView(); }).catch(() => {});
@@ -1578,6 +1579,32 @@
     settingsTabActive = false;
     if (settingsViewEl) settingsViewEl.style.display = 'none';
     syncNavActive();
+  }
+
+  // ── Downloader check interval (ttpull) ───────────────────────────────────────
+  // The value lives in ttpull; kashibox reads and changes it through /api/ttpull/settings.
+  let _dlCfg = null;          // { syncIntervalMinutes, paused, min, max, nextRunAt } | { error } | null while unknown
+  let _dlLoading = false;
+
+  function loadDownloaderSettings() {
+    if (_dlLoading) return;
+    _dlLoading = true;
+    fetch('/api/ttpull/settings', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(j => { _dlCfg = j && j.ok ? j.settings : { error: (j && j.error) || 'ttpull is not reachable' }; })
+      .catch(() => { _dlCfg = { error: 'ttpull is not reachable' }; })
+      .finally(() => { _dlLoading = false; if (settingsTabActive) renderSettingsView(); });
+  }
+
+  function dlWhen(iso) {
+    const d = iso ? new Date(iso) : null;
+    return d && !isNaN(d) ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  }
+
+  function dlStatusText(cfg) {
+    if (cfg.paused) return 'Paused: ttpull will not check for new videos on its own.';
+    const t = dlWhen(cfg.nextRunAt);
+    return t ? `Checking every ${cfg.syncIntervalMinutes} minutes. Next check about ${t}.` : `Checking every ${cfg.syncIntervalMinutes} minutes.`;
   }
 
   function renderSettingsView() {
@@ -1753,6 +1780,66 @@
         if (!isNaN(when)) fact('Archive last updated', when.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }));
       }
     });
+
+    // ── downloader schedule ──
+    const dl = section('Downloader', 'How often ttpull looks for new likes and favorites. Each check opens a browser and makes some requests on your account, so a longer interval is gentler. 0 pauses the checks.');
+    const dlRow = document.createElement('div');
+    dlRow.className = 'set-try';
+    const dlIn = document.createElement('input');
+    dlIn.className = 'set-input set-try-input';
+    dlIn.type = 'number'; dlIn.min = '0'; dlIn.max = '1440'; dlIn.step = '1';
+    dlIn.setAttribute('aria-label', 'Minutes between checks');
+    dlIn.style.maxWidth = '110px';
+    const dlUnit = document.createElement('span');
+    dlUnit.textContent = ' minutes'; dlUnit.style.color = '#aaa';
+    const dlStatus = document.createElement('div');
+    dlStatus.className = 'set-status';
+    const dlPresets = document.createElement('div');
+    dlPresets.className = 'set-try';
+    dlRow.append(dlIn, dlUnit);
+    dl.append(dlRow, dlPresets, dlStatus);
+
+    const cfg = _dlCfg;
+    if (!cfg) {
+      dlIn.disabled = true; dlStatus.textContent = 'Loading…';
+      loadDownloaderSettings();
+    } else if (cfg.error) {
+      dlIn.disabled = true; dlStatus.textContent = cfg.error;
+    } else {
+      dlIn.value = String(cfg.syncIntervalMinutes);
+      dlStatus.textContent = dlStatusText(cfg);
+      const lo = cfg.min || 10, hi = cfg.max || 1440;
+      const apply = (minutes) => {
+        dlStatus.textContent = 'Saving…';
+        fetch('/api/ttpull/settings', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ syncIntervalMinutes: minutes }),
+        }).then(r => r.json().catch(() => ({ ok: false, error: 'unexpected reply' })))
+          .then(j => {
+            if (j && j.ok) { _dlCfg = j.settings; dlStatus.textContent = 'Saved. ' + dlStatusText(j.settings); }
+            else dlStatus.textContent = (j && j.error) || 'Could not save.';
+          })
+          .catch(() => { dlStatus.textContent = 'Could not reach the server.'; });
+      };
+      let dlTimer = null;
+      dlIn.addEventListener('input', () => {
+        clearTimeout(dlTimer);
+        const raw = dlIn.value.trim();
+        const n = /^\d+$/.test(raw) ? parseInt(raw, 10) : NaN;
+        if (!Number.isInteger(n) || (n !== 0 && (n < lo || n > hi))) {
+          dlStatus.textContent = `Use 0 to pause, or a whole number from ${lo} to ${hi}.`;
+          return;
+        }
+        dlTimer = setTimeout(() => apply(n), 600);
+      });
+      [[15, '15 min'], [30, '30 min'], [60, '1 hour'], [360, '6 hours'], [0, 'Pause']].forEach(([m, label]) => {
+        const b = document.createElement('button');
+        b.className = 'set-btn';
+        b.textContent = label;
+        b.addEventListener('click', () => { clearTimeout(dlTimer); dlIn.value = String(m); apply(m); });
+        dlPresets.appendChild(b);
+      });
+    }
 
     // ── this device ──
     const dev = section('This device');
