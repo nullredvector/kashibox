@@ -378,14 +378,15 @@
       ['following', 'db_following.js', false],
     ];
     const out = {};
-    for (const [key, file, required] of files) {
+    // all the files at once; a missing optional one is skipped, a missing required one fails the whole load
+    await Promise.all(files.map(async ([key, file, required]) => {
       try {
         out[key] = await readDbFile(file);
       } catch (e) {
         if (required) throw e;
         console.warn('[starplayer] optional db file unavailable:', file, e);
       }
-    }
+    }));
     if (out.likes && out.likes.likes) out.likes = out.likes.likes;
     return out;
   }
@@ -395,9 +396,9 @@
     const b64 = text.match(/_base64\s*=\s*"([^"]+)"/);
     let json;
     if (b64) {
-      const bin = Uint8Array.from(atob(b64[1]), c => c.charCodeAt(0));
-      const stream = new Blob([bin]).stream().pipeThrough(new DecompressionStream('gzip'));
-      json = await new Response(stream).text();
+      // let the browser decode the base64 natively (about twice as fast as a JS loop, and off the main thread)
+      const blob = await (await fetch('data:application/octet-stream;base64,' + b64[1])).blob();
+      json = await new Response(blob.stream().pipeThrough(new DecompressionStream('gzip'))).text();
     } else {
       const raw = text.match(/String\.raw`([\s\S]*)`/);
       if (!raw) throw new Error('unrecognised format: ' + file);
@@ -4421,7 +4422,7 @@
         orderHomeList(homeFeedPool.slice()).then(next => {
           const recent = new Set(playerVideoList.slice(-300).map(v => v.id));
           const fresh = next.filter(v => !recent.has(v.id));
-          playerVideoList.push(...(fresh.length ? fresh : next));
+          for (const v of (fresh.length ? fresh : next)) playerVideoList.push(v);   // not push(...list): a huge archive would overflow the call
           appending = false;
           appendMore();
         }).catch(() => { appending = false; });
@@ -7667,7 +7668,6 @@ render();
       #player-title-group { flex: 1; display: flex; align-items: baseline; gap: 10px; justify-content: center; }
       #player-title { font-size: 15px; font-weight: 600; }
       #player-counter { font-size: 12px; color: #666; }
-      .player-video-wrap { flex: 1; position: relative; }
       .player-video { width: 100%; height: 100%; object-fit: contain; display: block; }
       .player-controls { position: absolute; inset: 0; pointer-events: none; }
       .player-right-center {
