@@ -89,6 +89,9 @@ function cleanSettings(input) {
     out.profileUrl = u;
   }
   if (typeof s.debugBanner === 'boolean') out.debugBanner = s.debugBanner;
+  if (Number.isInteger(s.numericMin) && Number.isInteger(s.numericMax) && s.numericMin >= 0 && s.numericMax <= 999 && s.numericMin <= s.numericMax && s.numericMax - s.numericMin < 50) {
+    out.numericMin = s.numericMin; out.numericMax = s.numericMax;
+  }
   if (typeof s.numericName === 'string') out.numericName = s.numericName.trim().slice(0, 30);
   return out;
 }

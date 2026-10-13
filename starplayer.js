@@ -1491,10 +1491,22 @@
 
   const GEAR_PATH = '<path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>';
   const SETTINGS_KEY = 'sp_settings';
-  let settings = { profileUrl: '', debugBanner: false, numericName: '' };
+  let settings = { profileUrl: '', debugBanner: false, numericName: '', numericMin: 10, numericMax: 23 };
   // The one-per-video number (10–23) is called "numeric tags" unless the user renames it in Settings
   const NUM_EMPTY = '#';
   const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // The numbers a video can be given: numericMin..numericMax (default 10–23, at most 50 of them)
+  function numRange() {
+    const lo = Number(settings.numericMin), hi = Number(settings.numericMax);
+    return Number.isInteger(lo) && Number.isInteger(hi) && lo >= 0 && hi <= 999 && lo <= hi && hi - lo < 50 ? [lo, hi] : [10, 23];
+  }
+  const numList = () => { const [lo, hi] = numRange(), a = []; for (let n = lo; n <= hi; n++) a.push(n); return a; };
+  // the choices to filter by: the range plus any number already in use outside it, so nothing becomes unreachable
+  function numFilterList() {
+    const set = new Set(numList());
+    for (const id in levels) if (Number.isInteger(levels[id])) set.add(levels[id]);
+    return [...set].sort((a, b) => a - b);
+  }
   const numName = () => String(settings.numericName || '').trim() || 'numeric tags';
   let settingsTabActive = false;
   let settingsViewEl = null;
@@ -1656,7 +1668,7 @@
     if (settings.profileUrl) status.textContent = 'Saved.';
 
     // ── numeric tags ──
-    const numSec = section('Numeric tags', 'A video can carry one number from 10 to 23. This is the name shown for it across the app (buttons, the Stars filter and its page). Pick whatever fits how you use it; leave it empty to go back to \u201cnumeric tags\u201d.');
+    const numSec = section('Numeric tags', 'A video can carry one number from the range you set below (10 to 23 to start with). The name is shown across the app (buttons, the Stars filter and its page). Pick whatever fits how you use it; leave the name empty to go back to \u201cnumeric tags\u201d.');
     const numIn = document.createElement('input');
     numIn.className = 'set-input';
     numIn.type = 'text'; numIn.maxLength = 30;
@@ -1675,7 +1687,33 @@
         });
       }, 450);
     });
-    numSec.append(numIn, numStatus);
+    const rangeRow = document.createElement('div');
+    rangeRow.className = 'set-try';
+    const mkNum = (val, label) => {
+      const i = document.createElement('input');
+      i.className = 'set-input set-try-input'; i.type = 'number'; i.min = '0'; i.max = '999'; i.step = '1';
+      i.value = String(val); i.setAttribute('aria-label', label); i.style.maxWidth = '90px';
+      return i;
+    };
+    const [curLo, curHi] = numRange();
+    const loIn = mkNum(curLo, 'Lowest number'), hiIn = mkNum(curHi, 'Highest number');
+    const dash = document.createElement('span'); dash.textContent = ' to '; dash.style.color = '#aaa';
+    let rangeTimer = null;
+    const saveRange = () => {
+      const lo = parseInt(loIn.value, 10), hi = parseInt(hiIn.value, 10);
+      if (!Number.isInteger(lo) || !Number.isInteger(hi) || lo < 0 || hi > 999 || lo > hi) { numStatus.textContent = 'Use whole numbers from 0 to 999, lowest first.'; return; }
+      if (hi - lo >= 50) { numStatus.textContent = 'At most 50 numbers in the range.'; return; }
+      clearTimeout(rangeTimer);
+      rangeTimer = setTimeout(() => {
+        saveSettings({ numericMin: lo, numericMax: hi }).then(msg => {
+          numStatus.textContent = msg || 'Saved. Videos that already have a number outside this range keep it.';
+          if (starsTabActive) renderStarsView();
+        });
+      }, 450);
+    };
+    loIn.addEventListener('input', saveRange); hiIn.addEventListener('input', saveRange);
+    rangeRow.append(loIn, dash, hiIn);
+    numSec.append(numIn, rangeRow, numStatus);
 
     // ── archive summary ──
     const d = _dbCache;
@@ -1839,7 +1877,7 @@
 
     const lvlGrid = document.createElement('div');
     lvlGrid.id = 'stars-lvl-grid';
-    for (let n = 10; n <= 23; n++) {
+    for (const n of numFilterList()) {
       const count = Object.keys(levels).filter(id => levels[id] === n).length;
       const btn = document.createElement('button');
       btn.className = 'stars-lvl-btn' + (activeLvl.has(n) ? ' active' : '');
@@ -2110,7 +2148,7 @@
     if (mobileStarsLvlOpen || activeLvl.size > 0) {
       const lvlStrip = document.createElement('div');
       lvlStrip.id = 'stars-mobile-lvl-strip';
-      for (let n = 10; n <= 23; n++) {
+      for (const n of numFilterList()) {
         const count = Object.keys(levels).filter(id => levels[id] === n).length;
         if (!count) continue;
         const btn = document.createElement('button');
@@ -2562,7 +2600,7 @@
 
     const currentLvl = levels[videoId] ?? null;
 
-    for (let n = 10; n <= 23; n++) {
+    for (const n of numList()) {
       const btn = document.createElement('button');
       btn.className = 'lvl-picker-btn' + (currentLvl === n ? ' cur' : '');
       btn.textContent = n;
@@ -4480,6 +4518,7 @@
     const initGroups = safeJson(groups);
     const initLevels = safeJson(levels);
     const initNumName = safeJson(numName());
+    const initNumRange = safeJson(numRange());
     const apiOrigin  = location.origin;
 
     win.document.write(`<!DOCTYPE html>
@@ -4556,6 +4595,7 @@ let muted=true;
 let starsData=${initStars};
 let groupsData=${initGroups};
 let levelsData=${initLevels};
+const NUMRANGE=${initNumRange}, NUMLO=NUMRANGE[0], NUMHI=NUMRANGE[1];
 
 function ls(){return starsData;}
 function lg(){return groupsData;}
@@ -4620,7 +4660,7 @@ function showLvlPicker(btn,id){
   const cur=(ll()[id]??null);
   const p=document.createElement('div');
   p.className='picker lpicker';
-  for(let n=10;n<=23;n++){
+  for(let n=NUMLO;n<=NUMHI;n++){
     const b=document.createElement('button');
     b.className='lpbtn'+(cur===n?' cur':'');
     b.textContent=n;
