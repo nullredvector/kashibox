@@ -4,6 +4,11 @@ struct TVSession: Decodable, Identifiable, Equatable {
     let id: String
     let label: String
     let count: Int
+    let updatedAt: Double   // milliseconds since 1970
+
+    var lastUsed: String {
+        Date(timeIntervalSince1970: updatedAt / 1000).formatted(.dateTime.month(.abbreviated).day().hour().minute())
+    }
 }
 
 /// The few calls the TV makes besides the live stream.
