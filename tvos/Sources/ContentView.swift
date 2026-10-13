@@ -2,42 +2,46 @@ import SwiftUI
 
 private let gap: CGFloat = 16
 private let margin: CGFloat = 40
+private let columns = 4
 
-/// Picks the column count that gives the biggest 9:16 tiles for this many videos.
-private func bestLayout(count: Int, in size: CGSize) -> (cols: Int, tile: CGSize) {
+/// Up to four panels sit in one row; from the fifth on a second row is added. Tiles are 9:16 and as big as fit.
+private func layoutFor(count: Int, in size: CGSize) -> (rows: Int, tile: CGSize) {
+    let rows = count > columns ? 2 : 1
+    let perRow = rows == 1 ? max(count, 1) : columns
     let availW = size.width - 2 * margin
     let availH = size.height - 2 * margin
-    var best: (cols: Int, tile: CGSize) = (1, .zero)
-    for cols in 1...max(count, 1) {
-        let rows = Int((Double(count) / Double(cols)).rounded(.up))
-        let w = (availW - gap * CGFloat(cols - 1)) / CGFloat(cols)
-        let h = (availH - gap * CGFloat(max(rows, 1) - 1)) / CGFloat(max(rows, 1))
-        let tw = min(w, h * 9 / 16)
-        if tw > best.tile.width { best = (cols, CGSize(width: tw, height: tw * 16 / 9)) }
-    }
-    return best
+    let w = (availW - gap * CGFloat(perRow - 1)) / CGFloat(perRow)
+    let h = (availH - gap * CGFloat(rows - 1)) / CGFloat(rows)
+    let tw = min(w, h * 9 / 16)
+    return (rows, CGSize(width: tw, height: tw * 16 / 9))
 }
 
 struct ContentView: View {
     @EnvironmentObject private var store: TVStore
+    @FocusState private var focused: Bool
     @State private var paused = false
+    @State private var sound = false
+    @State private var selectedID: String?
+    @State private var showSelection = false
+    @State private var hideTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { geo in
-            let count = store.items.count
-            let layout = bestLayout(count: count, in: geo.size)
-            let rows = max(1, Int((Double(count) / Double(layout.cols)).rounded(.up)))
-            let totalH = CGFloat(rows) * layout.tile.height + CGFloat(rows - 1) * gap
+            let panels = store.panels
+            let count = panels.count
+            let layout = layoutFor(count: count, in: geo.size)
+            let totalH = CGFloat(layout.rows) * layout.tile.height + CGFloat(layout.rows - 1) * gap
 
             ZStack {
                 Color(white: 0.02)
                 if count == 0 { IdleView(connected: store.connected) }
-                ForEach(Array(store.items.enumerated()), id: \.element.id) { index, item in
-                    let row = index / layout.cols
-                    let col = index % layout.cols
-                    let inRow = min(layout.cols, count - row * layout.cols)
+                ForEach(Array(panels.enumerated()), id: \.element.id) { index, panel in
+                    let row = index / columns
+                    let col = index % columns
+                    let inRow = min(columns, count - row * columns)
                     let rowW = CGFloat(inRow) * layout.tile.width + CGFloat(inRow - 1) * gap
-                    TileView(item: item, paused: paused)
+                    TileView(panel: panel, paused: paused,
+                             selected: showSelection && panel.id == selectedID, sound: sound)
                         .frame(width: layout.tile.width, height: layout.tile.height)
                         .position(
                             x: (geo.size.width - rowW) / 2 + CGFloat(col) * (layout.tile.width + gap) + layout.tile.width / 2,
@@ -45,10 +49,44 @@ struct ContentView: View {
                         )
                 }
             }
-            .animation(.easeInOut(duration: 0.35), value: store.items)
+            .animation(.easeInOut(duration: 0.35), value: panels.map(\.id))
         }
         .ignoresSafeArea()
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onAppear { focused = true }
+        .onMoveCommand(perform: handleMove)
+        .onTapGesture { sound.toggle(); touch() }
         .onPlayPauseCommand { paused.toggle() }
+    }
+
+    // Left / right move the selection through the panels. Up / down page through the selected panel's author feed.
+    private func handleMove(_ direction: MoveCommandDirection) {
+        let panels = store.panels
+        guard !panels.isEmpty else { return }
+        var current = panels.firstIndex { $0.id == selectedID } ?? (panels.count - 1)
+        switch direction {
+        case .left:  current = max(0, current - 1)
+        case .right: current = min(panels.count - 1, current + 1)
+        case .up:    withAnimation(.easeInOut(duration: 0.25)) { panels[current].step(1) }
+        case .down:  withAnimation(.easeInOut(duration: 0.25)) { panels[current].step(-1) }
+        @unknown default: break
+        }
+        selectedID = panels[current].id
+        touch()
+    }
+
+    private func touch() {
+        if selectedID == nil || !store.panels.contains(where: { $0.id == selectedID }) {
+            selectedID = store.panels.last?.id
+        }
+        showSelection = true
+        hideTask?.cancel()
+        hideTask = Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if !Task.isCancelled { showSelection = false }
+        }
     }
 }
 

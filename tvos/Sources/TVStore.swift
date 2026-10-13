@@ -14,9 +14,11 @@ private struct TVEvent: Decodable {
 /// Keeps one long-lived connection to the server and mirrors the grid it announces.
 @MainActor
 final class TVStore: ObservableObject {
-    @Published private(set) var items: [TVItem] = []
+    @Published private(set) var panels: [PanelModel] = []
     @Published private(set) var connected = false
     private var task: Task<Void, Never>?
+    private var byID: [String: PanelModel] = [:]
+    private var lastItems: [TVItem] = []
 
     func start() {
         guard task == nil else { return }
@@ -43,7 +45,7 @@ final class TVStore: ObservableObject {
                     guard let data = json.data(using: .utf8),
                           let event = try? JSONDecoder().decode(TVEvent.self, from: data),
                           event.type == "state" else { continue }
-                    if event.items != items { items = event.items }
+                    if event.items != lastItems { apply(event.items) }
                 }
             } catch {
                 // fall through and reconnect
@@ -51,5 +53,25 @@ final class TVStore: ObservableObject {
             connected = false
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
+    }
+
+    private func apply(_ items: [TVItem]) {
+        lastItems = items
+        var next: [PanelModel] = []
+        var fresh: [PanelModel] = []
+        for item in items {
+            if let panel = byID[item.id] {
+                next.append(panel)
+            } else {
+                let panel = PanelModel(item)
+                byID[item.id] = panel
+                next.append(panel)
+                fresh.append(panel)
+            }
+        }
+        let keep = Set(items.map(\.id))
+        byID = byID.filter { keep.contains($0.key) }
+        panels = next
+        for panel in fresh { Task { await panel.loadAuthorFeed() } }
     }
 }

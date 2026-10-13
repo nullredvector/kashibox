@@ -6,6 +6,7 @@ const url      = require('url');
 const zlib     = require('zlib');
 const crypto   = require('crypto');
 const dbStars  = require('./db_stars');
+const tvAuthor = require('./tv_author');
 
 const ARCHIVE_DIR = process.env.ARCHIVE_DIR || '/archive';
 const PORT        = parseInt(process.env.PORT || '8080', 10);
@@ -158,7 +159,7 @@ const SHELL_FILE    = path.join(__dirname, 'shell.html');
 const SCRIPT_FILE   = path.join(__dirname, 'starplayer.js');
 const CAST_RCV_FILE = path.join(__dirname, 'cast-receiver.html');
 
-const TV_MAX_TILES = 6;
+const TV_MAX_TILES = 8;
 const tvClients = new Set();
 let tvGrid = [];
 
@@ -407,6 +408,14 @@ http.createServer((req, res) => {
     tvClients.add(res);
     const beat = setInterval(() => { try { res.write(': hb\n\n'); } catch (_) {} }, 15000);
     req.on('close', () => { clearInterval(beat); tvClients.delete(res); });
+    return;
+  }
+  if (pathname === '/api/tv/author' && req.method === 'GET') {
+    const feed = tvAuthor.authorFeed(ARCHIVE_DIR, String(url.parse(req.url, true).query.v || ''));
+    if (!feed) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid video' })); return; }
+    const body = JSON.stringify(feed);
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });
+    res.end(body);
     return;
   }
   if (pathname === '/api/tv/status' && req.method === 'GET') {

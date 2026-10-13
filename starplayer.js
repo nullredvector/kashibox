@@ -4011,6 +4011,21 @@
     rightCenter.appendChild(lvlBtn);
     rightCenter.appendChild(groupBtn);
     rightCenter.insertBefore(muteBtn, rightCenter.firstChild);   // mute sits at the top of the button column, above like
+
+    // Send the video in view to the TV: first in the column, above mute (shown only while a TV app or a Cast session is there)
+    const tvBtn = document.createElement('button');
+    tvBtn.className = 'player-ctrl-btn player-tv-btn sp-tv-send';
+    tvBtn.title = 'Show on the TV';
+    tvBtn.innerHTML = CAST_SVG;
+    tvBtn.style.display = castActive() ? '' : 'none';
+    tvBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (!currentItem) return;
+      castItem(currentItem.videoPath || getVideoPath(currentItem.coverSrc), currentItem.coverSrc);
+      tvBtn.classList.add('sp-sent');
+      setTimeout(() => tvBtn.classList.remove('sp-sent'), 500);
+    });
+    rightCenter.insertBefore(tvBtn, rightCenter.firstChild);
     ctrlLayer.appendChild(rightCenter);
 
     // Username above the caption in one box anchored to the bottom: with no caption the username drops down
@@ -4287,23 +4302,8 @@
         }
       }, { passive: true });
 
-      // Send this video to the TV (shown only while a TV app or a Cast session is there)
-      const tvBtn = document.createElement('button');
-      tvBtn.className = 'sp-tv-send';
-      tvBtn.title = 'Show on the TV';
-      tvBtn.innerHTML = CAST_SVG;
-      tvBtn.style.display = castActive() ? '' : 'none';
-      ['touchstart', 'touchend', 'pointerdown'].forEach(ev => tvBtn.addEventListener(ev, e => e.stopPropagation(), { passive: true }));
-      tvBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        castItem(item.videoPath, item.coverSrc);
-        tvBtn.classList.add('sp-sent');
-        setTimeout(() => tvBtn.classList.remove('sp-sent'), 500);
-      });
-
       slide.appendChild(video);
       slide.appendChild(cover);
-      slide.appendChild(tvBtn);
       feed.appendChild(slide);
       videoEls.push(video);
       if (io) { slide.style.height = feed.clientHeight + 'px'; io.observe(slide); }   // added after the feed is live
@@ -7151,14 +7151,8 @@ render();
 
 
       /* ── Cast button in mobile nav ── */
-      .sp-tv-send {
-        position: absolute; left: 10px; top: calc(env(safe-area-inset-top, 0px) + 96px); z-index: 12;
-        width: 40px; height: 40px; padding: 8px; border: none; border-radius: 50%;
-        background: rgba(0,0,0,.5); color: #fff; display: flex; align-items: center; justify-content: center;
-        transition: background .15s, transform .1s;
-      }
-      .sp-tv-send svg { width: 22px; height: 22px; display: block; }
-      .sp-tv-send.sp-sent { background: rgba(77,208,225,.8); transform: scale(0.88); }
+      .sp-tv-send.sp-sent { color: #4dd0e1 !important; }
+      .player-tv-btn svg { width: 26px; height: 26px; }
       #sp-cast-nav-btn svg { width: 22px; height: 22px; display: block; }
       #sp-cast-nav-btn.sp-cast-on { color: #4dd0e1; }
 

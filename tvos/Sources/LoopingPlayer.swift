@@ -6,10 +6,11 @@ final class PlayerView: UIView {
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 }
 
-/// A muted, endlessly looping video that fills its frame.
+/// An endlessly looping video that fills its frame.
 struct LoopingPlayer: UIViewRepresentable {
     let url: URL?
     let paused: Bool
+    let muted: Bool
     let onReady: () -> Void
 
     final class Coordinator {
@@ -26,7 +27,7 @@ struct LoopingPlayer: UIViewRepresentable {
         guard let url else { return view }
 
         let player = AVQueuePlayer()
-        player.isMuted = true
+        player.isMuted = muted
         context.coordinator.looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
         context.coordinator.player = player
         view.playerLayer.player = player
@@ -41,6 +42,7 @@ struct LoopingPlayer: UIViewRepresentable {
 
     func updateUIView(_ view: PlayerView, context: Context) {
         guard let player = context.coordinator.player else { return }
+        player.isMuted = muted
         if paused { player.pause() } else if player.rate == 0 { player.play() }
     }
 
