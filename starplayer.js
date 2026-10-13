@@ -3075,7 +3075,7 @@
     h.el.style.display = 'flex';
     playerVideoList = h.list; playerColumnOffsets = h.offsets; playerWinStart = h.win; endFeedVisit = h.endVisit;
     playerOpen = true;
-    if (!authorViewOpen()) h.el.querySelectorAll('video')[(h.offsets[0] || 0) - h.win]?.play().catch(() => {});
+    if (!authorViewOpen()) h.el.querySelectorAll('video:not(.sp-twin)')[(h.offsets[0] || 0) - h.win]?.play().catch(() => {});
   }
   function dropHomeStash() {
     if (!homeStash) return;
@@ -4463,16 +4463,99 @@
         setTimeout(gone, 1500);
       } else setTimeout(gone, 400);
     }
+
+    // ── Twin video: no restart at the loop point ──
+    // iOS leaves a black gap whenever one video element restarts, however it is done. So the video in view gets a
+    // twin: a second, muted copy waiting (paused, decoded) on its first frame. At the loop point the twin is shown and
+    // played, so the picture goes from the last frame straight to the first one. The real video restarts underneath
+    // (its black gap is hidden), is moved to where the twin is, and the twin steps aside again.
+    let twin = null;   // { for, el, ready, state: 'idle' | 'engaged', ... }
+    function twinHide(t) { try { t.el.style.opacity = '0'; t.el.pause(); } catch (_) {} }
+    function twinDrop() {
+      if (!twin) return;
+      const t = twin; twin = null;
+      clearTimeout(t.timer); clearInterval(t.iv);
+      try { t.el.pause(); t.el.removeAttribute('src'); t.el.load(); } catch (_) {}
+      t.el.remove();
+    }
+    function twinWanted(v) { return (v._blob && v._blob.url) || v._netSrc; }
+    function twinPrepare(v) {
+      if (twin && twin.for === v) return;
+      twinDrop();
+      if (!v._netSrc || !v.videoWidth || !v.parentElement) return;
+      const el = document.createElement('video');
+      el.className = v.className + ' sp-twin';
+      el.muted = true; el.loop = false; el.playsInline = true; el.preload = 'auto'; el.disablePictureInPicture = true;
+      el.setAttribute('playsinline', ''); el.setAttribute('webkit-playsinline', '');
+      el.style.cssText = v.style.cssText + ';opacity:0;pointer-events:none';
+      el.src = twinWanted(v);
+      v.parentElement.insertBefore(el, v.nextSibling);
+      const t = twin = { for: v, el, ready: false, state: 'idle', timer: 0, iv: 0, src: el.src };
+      const ok = () => { if (twin === t && t.state === 'idle' && el.readyState >= 2 && el.currentTime < 0.05) t.ready = true; };
+      el.addEventListener('loadeddata', ok); el.addEventListener('seeked', ok); el.addEventListener('canplay', ok);
+      el.addEventListener('error', () => { if (twin === t) { loopLog('twin load error'); twinDrop(); v._noTwin = true; } });
+      el.load();
+    }
+    // the twin steps aside and goes back to its first frame, ready for the next round
+    function twinReset(t) {
+      twinHide(t);
+      t.state = 'idle'; t.ready = false;
+      clearInterval(t.iv);
+      setTimeout(() => {
+        if (twin !== t) return;
+        const want = twinWanted(t.for);
+        if (want && want !== t.src) { t.src = want; t.el.src = want; t.el.load(); }
+        else { try { t.el.currentTime = 0; } catch (_) {} }
+      }, 250);
+    }
+    function twinEngage(v) {
+      const t = twin;
+      if (!t || t.for !== v || t.state !== 'idle' || !t.ready || v.paused || v._userPaused) return;
+      t.timer = 0;
+      const el = t.el;
+      el.style.cssText = v.style.cssText + ';pointer-events:none';   // shown, same size and fit as the video
+      el.playbackRate = v.playbackRate || 1;
+      t.state = 'engaged'; t.ready = false; t.at = Date.now(); t.tries = 0; t.lead = 0.2; t.seekedAt = 0;
+      const p = el.play(); if (p && p.catch) p.catch(() => { if (twin === t && t.state === 'engaged') { loopLog('twin play refused'); twinReset(t); } });
+      v._loops = (v._loops || 0) + 1;
+      if (v._loops === 1) startBlob(v);
+      // second round onwards the real video also restarts from the copy held in memory (under the twin)
+      let swapped = false;
+      if (v._blob && v._blob.state === 'ready') { v._blob.state = 'swapped'; swapped = true; v.src = v._blob.url; v.load(); startPlayback(v); }
+      loopLog('twin on loop ' + v._loops + (swapped ? ' swap' : '') + ' blob:' + (v._blob ? v._blob.state : '-'));
+      clearInterval(t.iv);
+      t.iv = setInterval(() => twinSettle(v, t), 50);
+    }
+    // wait for the real video to be running again, move it to where the twin is, then let the twin go
+    function twinSettle(v, t) {
+      if (twin !== t || t.state !== 'engaged') { clearInterval(t.iv); return; }
+      const el = t.el, age = Date.now() - t.at;
+      if (v._userPaused || document.hidden) { loopLog('twin paused'); twinReset(t); return; }
+      if (age > 4000) { loopLog('twin timeout A paused:' + v.paused + ' seeking:' + v.seeking + ' rs:' + v.readyState + ' t:' + v.currentTime.toFixed(1) + ' B:' + el.currentTime.toFixed(1)); twinReset(t); return; }
+      if (v.paused || v.seeking || v.readyState < 3) return;
+      const diff = el.currentTime - v.currentTime;   // the video restarts later than the twin, so it is behind
+      if (diff < -0.5) return;                       // the video has not wrapped round yet
+      if (Math.abs(diff) < 0.08 || t.tries >= 3) {
+        loopLog('twin handoff ' + age + 'ms diff ' + Math.round(diff * 1000) + ' tries ' + t.tries);
+        twinReset(t);
+        return;
+      }
+      t.tries++;
+      t.lead = Math.max(0.05, t.lead + (t.tries > 1 ? diff : 0));
+      try { v.currentTime = Math.min(v.duration - 0.05, el.currentTime + (t.tries === 1 ? 0.25 : t.lead)); } catch (_) {}
+    }
+
     const loopTimer = setInterval(() => {
       if (!feed.isConnected) {   // this feed was replaced (the container is reused, so test the feed itself)
-        clearInterval(loopTimer); dropBridge();
+        clearInterval(loopTimer); dropBridge(); twinDrop();
         blobUrls.forEach(u => URL.revokeObjectURL(u)); blobUrls.clear();
         return;
       }
       const v = currentVid;
       const hidden = !v || v._userPaused || document.hidden || authorViewOpen() || overlay.style.visibility === 'hidden' || overlay.getClientRects().length === 0;
-      if (hidden) { dropBridge(); clock.at = Date.now(); return; }
+      if (hidden) { dropBridge(); if (twin && twin.state === 'engaged') twinReset(twin); clock.at = Date.now(); return; }
       if (bridge && bridge.vid !== v) dropBridge();
+      if (twin && twin.for !== v) twinDrop();
       const d = v.duration, t = v.currentTime;
       if (!d || !isFinite(d)) return;
 
@@ -4489,8 +4572,14 @@
       }
 
       const left = d - t;
-      if (!bridge && left > 0.12 && left < 1 && !v.paused && Date.now() - (v._stillAt || 0) > 100) { v._stillAt = Date.now(); captureStill(v); }
-      if (!bridge && left >= 0 && left < 0.15 && !v.paused && v.videoWidth) {
+      // the twin: prepared once the video is under way, switched in just before the end
+      if (!twin && !v._noTwin && t > 0.5 && d > 1 && v.videoWidth && !v._userPaused) twinPrepare(v);
+      if (twin && twin.ready && twin.state === 'idle' && !twin.timer && left < 0.3 && left >= 0 && !v.paused) {
+        twin.timer = setTimeout(() => twinEngage(v), Math.max(0, (left - 0.03) * 1000 / (v.playbackRate || 1)));
+      }
+      const twinCovers = twin && (twin.state === 'engaged' || twin.timer || twin.ready);   // then no still is needed
+      if (!bridge && !twinCovers && left > 0.12 && left < 1 && !v.paused && Date.now() - (v._stillAt || 0) > 100) { v._stillAt = Date.now(); captureStill(v); }
+      if (!bridge && !twinCovers && left >= 0 && left < 0.15 && !v.paused && v.videoWidth) {
         let b = null, kind = 'frame', lum = '';
         try {
           let c = v._still; v._still = null;
@@ -5092,7 +5181,7 @@ render();
     if (isMobilePlayer() && activeMobileTab === 'home' && !playerOpen) openPlayer();
     spTrace('resume feed');
     if (resumePlayback && isMobilePlayer() && playerOpen && playerViewEl && playerViewEl.style.display !== 'none') {
-      playerViewEl.querySelectorAll('video')[(playerColumnOffsets[0] || 0) - playerWinStart]?.play().catch(() => {});
+      playerViewEl.querySelectorAll('video:not(.sp-twin)')[(playerColumnOffsets[0] || 0) - playerWinStart]?.play().catch(() => {});
     }
   }
 
