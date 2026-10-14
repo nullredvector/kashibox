@@ -19,7 +19,6 @@ private func layoutFor(count: Int, in size: CGSize) -> (rows: Int, perRow: Int, 
 
 struct ContentView: View {
     @EnvironmentObject private var store: TVStore
-    @FocusState private var focused: Bool
     @State private var audibleID: String?
     @State private var selectedID: String?
     @State private var showSelection = false
@@ -62,14 +61,10 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.35), value: panels.map(\.id))
         }
         .ignoresSafeArea()
-        .focusable()
-        .focusEffectDisabled()
-        .focused($focused)
-        .onAppear { focused = true }
-        .onMoveCommand(perform: handleMove)
-        .onTapGesture(perform: handleSelect)
-        .onLongPressGesture(minimumDuration: 0.7, perform: handleRemove)
-        .onPlayPauseCommand(perform: handlePlayPause)
+        .background(
+            RemoteInput(onSwipe: handleSwipe, onClick: handleClick, onSelect: handleSelect,
+                        onLongSelect: handleRemove, onPlayPause: handlePlayPause)
+        )
         .onChange(of: store.panels.map(\.id)) { old, new in followPanels(old: old, new: new) }
         .onChange(of: selectedID) { _, _ in report() }
         .onChange(of: showSelection) { _, _ in report() }
@@ -102,27 +97,50 @@ struct ContentView: View {
         store.panels.first { $0.id == selectedID } ?? store.panels.last
     }
 
-    // Left / right move the selection through the panels. Up / down page through the selected panel's author feed.
-    // With an empty grid they move through the session list instead.
-    private func handleMove(_ direction: MoveCommandDirection) {
+    // Swipe: left / right move the selection through the panels; up / down page through the selected panel's author
+    // (its own videos). With an empty grid they move through the session list instead.
+    private func handleSwipe(_ direction: RemoteDirection) {
+        switch direction {
+        case .left:  moveSelection(by: -1)
+        case .right: moveSelection(by: 1)
+        case .up:    vertical(1, viaClick: false)
+        case .down:  vertical(-1, viaClick: false)
+        }
+    }
+
+    // Click on the edge of the clickpad: left / right move the selection too; up / down move the selected panel along the
+    // Home feed, like scrolling it.
+    private func handleClick(_ direction: RemoteDirection) {
+        switch direction {
+        case .left:  moveSelection(by: -1)
+        case .right: moveSelection(by: 1)
+        case .up:    vertical(1, viaClick: true)
+        case .down:  vertical(-1, viaClick: true)
+        }
+    }
+
+    private func moveSelection(by delta: Int) {
+        let panels = store.panels
+        guard !panels.isEmpty else { return }
+        let current = panels.firstIndex { $0.id == selectedID } ?? (panels.count - 1)
+        selectedID = panels[min(max(current + delta, 0), panels.count - 1)].id
+        touch()
+    }
+
+    private func vertical(_ delta: Int, viaClick: Bool) {
         let panels = store.panels
         if panels.isEmpty {
-            switch direction {
-            case .up:   pickerIndex = max(0, pickerIndex - 1)
-            case .down: pickerIndex = min(max(store.sessions.count - 1, 0), pickerIndex + 1)
-            default: break
-            }
+            pickerIndex = min(max(pickerIndex - delta, 0), max(store.sessions.count - 1, 0))   // up = toward the top of the list
             return
         }
-        var current = panels.firstIndex { $0.id == selectedID } ?? (panels.count - 1)
-        switch direction {
-        case .left:  current = max(0, current - 1)
-        case .right: current = min(panels.count - 1, current + 1)
-        case .up:    withAnimation(.easeInOut(duration: 0.25)) { panels[current].step(1) }
-        case .down:  withAnimation(.easeInOut(duration: 0.25)) { panels[current].step(-1) }
-        @unknown default: break
+        let current = panels.firstIndex { $0.id == selectedID } ?? (panels.count - 1)
+        let panel = panels[current]
+        selectedID = panel.id
+        if viaClick {
+            Task { panel.feedStep(delta, in: await store.feedList()) }
+        } else {
+            panel.step(delta)
         }
-        selectedID = panels[current].id
         touch()
     }
 

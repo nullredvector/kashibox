@@ -22,6 +22,8 @@ final class TVStore: ObservableObject {
     private var byID: [String: PanelModel] = [:]
     private var lastItems: [TVItem] = []
     private var gotFirstState = false
+    private var feedCache: [VideoRef] = []
+    private var feedLoadedAt = Date.distantPast
 
     func start() {
         guard task == nil else { return }
@@ -32,6 +34,15 @@ final class TVStore: ObservableObject {
                 await refreshStars()
             }
         }
+    }
+
+    /// The Home feed order, re-read when it is over a minute old so changes on the phone show up.
+    func feedList() async -> [VideoRef] {
+        if feedCache.isEmpty || Date().timeIntervalSince(feedLoadedAt) > 60, let list = await API.feed() {
+            feedCache = list
+            feedLoadedAt = Date()
+        }
+        return feedCache
     }
 
     func loadSessions() async {

@@ -59,7 +59,9 @@ struct TileView: View {
             Color(white: 0.07)
             VideoSurface(video: panel.current, muted: !audible)
                 .id(panel.current.videoUrl)
-                .transition(.opacity)
+                .transition(.asymmetric(
+                    insertion: .move(edge: panel.direction > 0 ? .bottom : .top),
+                    removal: .move(edge: panel.direction > 0 ? .top : .bottom)))
             RoundedRectangle(cornerRadius: 14)
                 .strokeBorder(Color.white.opacity(0.9), lineWidth: 5)
                 .opacity(flash ? 1 : 0)

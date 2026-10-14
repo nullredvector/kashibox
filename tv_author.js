@@ -95,6 +95,23 @@ function authorFeed(archiveDir, videoPath, hidden) {
   };
 }
 
+// n random downloaded videos from any account -> [{ videoUrl, coverUrl }] (the TV's feed when no phone has published one)
+function shuffled(archiveDir, n) {
+  let idx;
+  try { idx = build(archiveDir); } catch (_) { return []; }
+  const all = [];
+  idx.byAuthor.forEach(list => list.forEach(e => all.push(e)));
+  const take = Math.min(n, all.length);
+  for (let i = 0; i < take; i++) {
+    const j = i + Math.floor(Math.random() * (all.length - i));
+    [all[i], all[j]] = [all[j], all[i]];
+  }
+  return all.slice(0, take).map(e => {
+    const videoUrl = `/data/${e.dir}/videos/${e.id}.mp4`;
+    return { videoUrl, coverUrl: coverFor(videoUrl) };
+  });
+}
+
 // A short label for a set of videos: the accounts they belong to, e.g. '@one, @two, @three +2' ('' if none are known)
 function labelFor(archiveDir, videoPaths) {
   let idx;
@@ -115,4 +132,4 @@ function parseVideoPath(videoPath) {
   return m ? { id: m[2], coverSrc: coverFor(videoPath).replace(/^\//, '') } : null;
 }
 
-module.exports = { authorFeed, labelFor, parseVideoPath };
+module.exports = { authorFeed, labelFor, parseVideoPath, shuffled };
