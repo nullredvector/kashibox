@@ -43,7 +43,11 @@ Run locally: `ARCHIVE_DIR=/path/to/archive PORT=9560 node server.js`, then open 
 - Account check: `GET /api/profile-check?name=` (`checkProfile` in server.js) asks the profile-link address from the server (404/410, a redirect to `/404`, or a 200 page whose embedded profile status is 10202/10221 = gone; the visible "couldn't find this account" text also sits in normal pages, so don't match it; anything else odd = unknown, never red) and caches it; `checkAuthorGone` in starplayer.js paints desktop username tabs red.
 - Gestures use a document-level handler (`setupMobileSwipe`). The username page and grid-opened videos own a history entry (`navPush`/`navPopQuiet`).
 - Performance: the server gzips the page, script, bigger JSON replies and archive text files, and gives the page/script/db files ETags (`sendStatic`, `sendBody`, `gzMemo` in server.js); the db files are decoded in parallel with the browser's native base64 decoder (`loadArchiveDb`/`readDbFile`). Measured on a 58k-video synthetic archive: db decode ~100 ms, ranking ~100 ms, tab switches under 150 ms on a laptop.
-- Looping videos are left to the browser; a watcher holds the last frame over the loop point, swaps to an in-memory copy after the first loop and restarts stalled videos.
+- Looping videos are left to the browser (the `loop` attribute); a small watcher only restarts stalled videos. Do not add tricks over the loop point: an iPhone cannot paint a hidden or covered second video, swapping a video's source reloads it black, and a held still adds a visible freeze. The real cause of a black flash is in the files, see below.
+
+## Video files
+
+A video flashes black at every loop on iPhones when its video track starts after time 0 while its audio starts at 0 (the file has sound but no picture for that first stretch). Most downloaded videos have a video start of 0.03-0.25 s. They are also padded with zero bytes after the last atom, up to fixed sizes, and have the index (moov) at the end, so playback only starts once the whole file is there. `tools/rewrap_videos.py` fixes all of that without re-encoding (`ffmpeg -c copy`, the video timestamps moved back, `+faststart`): it writes copies to a staging folder by default, and with `--replace` swaps each file in place only after checking codec, size, duration and that video and audio both start at 0. Run it on the archive folder with ffmpeg available (the autotag container has it); new downloads need the same re-wrap.
 
 ## Working rules
 

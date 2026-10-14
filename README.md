@@ -128,6 +128,14 @@ The image is rebuilt on every push to `master` and published as `:latest`; the d
 
 The UI is part of the image, so updating the image updates the UI.
 
+## Smooth loops on iPhone
+
+An iPhone shows a black flash every time a looping video restarts if the video's picture starts a little after its sound, which is common in downloaded videos. `tools/rewrap_videos.py` repairs a folder of videos without re-encoding them (ffmpeg's stream copy, nothing is re-compressed). It checks every file before using it and writes copies to a staging folder unless you pass `--replace`. It also moves each file's index to the front so playback starts sooner and drops the zero-byte padding many downloads carry. Try a batch first:
+
+```bash
+python3 tools/rewrap_videos.py /path/to/archive --limit 200
+```
+
 ## Companion projects
 
 - **ttpull**: a headless downloader that keeps the archive topped up on a schedule. It creates a new archive folder on first start and keeps the database files up to date. Set `DB_UPDATE=write` on the ttpull container: its default is `dry`, which only logs what it would change. Settings shows ttpull's connection and when the archive was last updated.
