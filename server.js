@@ -577,6 +577,20 @@ http.createServer((req, res) => {
     });
     return;
   }
+  // Take one panel off the grid ({ id })
+  if (pathname === '/api/tv/remove' && req.method === 'POST') {
+    tvBody(500, m => {
+      const before = tvGrid.length;
+      tvGrid = tvGrid.filter(i => i.id !== m.id);
+      if (tvGrid.length === before) { tvJson(404, { error: 'No such panel' }); return; }
+      if (tvSelectedId === m.id) tvSelectedId = null;
+      if (!tvGrid.length) tvSessionId = null;   // an empty grid ends the session; it stays saved as it was
+      else { try { tvSessionId = tvSessions.record(ARCHIVE_DIR, tvSessionId, tvGrid); } catch (_) {} }
+      tvBroadcast();
+      tvJson(200, { ok: true, count: tvGrid.length });
+    });
+    return;
+  }
   if (pathname === '/api/tv/status' && req.method === 'GET') {
     const body = JSON.stringify({ tvs: tvClients.size, items: tvGrid.length });
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });

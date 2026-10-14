@@ -35,6 +35,11 @@ enum API {
         _ = await post(Config.selectURL, ["id": panelID as Any? ?? NSNull()])
     }
 
+    /// Takes one panel off the grid; the new grid comes back over the live stream.
+    static func remove(panelID: String) async {
+        _ = await post(Config.removeURL, ["id": panelID])
+    }
+
     /// Which of these videos are starred right now.
     static func starred(among videoUrls: [String]) async -> Set<String>? {
         guard !videoUrls.isEmpty, let url = Config.starredURL(for: videoUrls),
