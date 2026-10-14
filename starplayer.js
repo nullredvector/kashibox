@@ -4399,7 +4399,7 @@
         if (vid.paused && !vid._userPaused) startPlayback(vid);
         return;
       }
-      if (currentVid && currentVid !== vid) { dropBridge(); releaseBlob(currentVid); currentVid.playbackRate = 1; }
+      if (currentVid && currentVid !== vid) { currentVid.playbackRate = 1; }
       endVisit();
       coverWindow(idx);
       visit = { id: renderList[idx].id, vid, t0: Date.now(), loops: 0 };
@@ -4547,12 +4547,10 @@
     renderList.forEach(makeSlide);
 
     // ── Keeping loops alive (watches only the video in view) ──
-    // 1) Over the loop point a still of the last frame is held on top (a canvas; the cover image if the phone hands
-    //    back a blank copy), and it only comes off once a genuinely new frame has been shown. No black gap.
-    // 2) After its first loop the video is swapped for a copy held in memory, so later loops never touch the network.
-    // 3) If the clock stops moving (iOS can stall a looping video) the video is nudged back to life.
-    let bridge = null, clock = { v: null, t: -1, at: 0 }, kicks = 0;
-    const blobUrls = new Set();
+    // Looping is left to the browser (the loop attribute). A loop only restarts without a black gap if the file's video
+    // starts at time 0 like its audio (see "Video files" in CLAUDE.md). What is watched here: if the clock stops moving
+    // (iOS can stall a looping video) the video is nudged back to life.
+    let clock = { v: null, t: -1, at: 0 }, kicks = 0;
     function loopLog(msg) {
       try {
         const l = JSON.parse(localStorage.getItem('sp_looplog') || '[]');
@@ -4561,82 +4559,13 @@
         localStorage.setItem('sp_looplog', JSON.stringify(l));
       } catch (_) {}
     }
-    function removeBridge(b) {
-      if (!b) return;
-      if (b.cover) { b.cover.classList.add('gone'); b.cover.style.transition = ''; } else if (b.canvas) b.canvas.remove();
-    }
-    function dropBridge() { removeBridge(bridge); bridge = null; }
-    function releaseBlob(v) {
-      if (!v || !v._blob) return;
-      const bl = v._blob; v._blob = null;
-      if (bl.url) {
-        if (bl.state === 'swapped' && v._netSrc) { v.preload = 'none'; v.src = v._netSrc; }
-        URL.revokeObjectURL(bl.url); blobUrls.delete(bl.url);
-      }
-    }
-    function startBlob(v) {
-      if (v._blob || !v._netSrc) return;
-      const bl = v._blob = { state: 'fetching' };
-      fetch(v._netSrc).then(r => (r.ok ? r.blob() : (loopLog('copy http ' + r.status), null))).then(b => {
-        if (v._blob !== bl) return;   // the video moved on while this was downloading
-        if (!b || b.size > 80e6) { if (b) loopLog('copy too big ' + Math.round(b.size / 1e6) + 'MB'); v._blob = null; return; }
-        bl.url = URL.createObjectURL(b); blobUrls.add(bl.url); bl.state = 'ready';
-        loopLog('copy ready ' + (b.size / 1e6).toFixed(1) + 'MB');
-      }).catch(e => { loopLog('copy failed ' + String(e && e.name || e).slice(0, 20)); if (v._blob === bl) v._blob = null; });
-    }
-    // Average brightness (0-255) of what a video/canvas currently shows, or -1 if it cannot be read. iOS can hand back
-    // a transparent OR an opaque black copy when it will not give up the frame, so both count as blank (below LUM_MIN).
-    const LUM_MIN = 6;
-    const lumProbe = document.createElement('canvas'); lumProbe.width = lumProbe.height = 8;
-    function frameLum(src) {
-      try {
-        const x = lumProbe.getContext('2d', { willReadFrequently: true });
-        x.clearRect(0, 0, 8, 8); x.drawImage(src, 0, 0, 8, 8);
-        const d = x.getImageData(0, 0, 8, 8).data;
-        let sum = 0; for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
-        return sum / (64 * 3);
-      } catch (_) { return -1; }
-    }
-    // During the last second keep a copy of the latest good frame, so the still held over the loop point is a
-    // picture from just before the end rather than a grab taken at the very last moment
-    function captureStill(v) {
-      if (!v.videoWidth) return;
-      const lum = frameLum(v);
-      if (lum < LUM_MIN) return;
-      let c = v._still || document.createElement('canvas');
-      if (c.width !== v.videoWidth || c.height !== v.videoHeight) { c.width = v.videoWidth; c.height = v.videoHeight; }
-      c.getContext('2d').drawImage(v, 0, 0);
-      c._lum = Math.round(lum);
-      v._still = c;
-    }
-    function dropBridgeWhenFresh(v, b) {
-      const gone = () => removeBridge(b);
-      if (v.requestVideoFrameCallback) {
-        let tries = 0;
-        const cb = (now, md) => {
-          // a frame from the end of the old round can still be in flight: wait for one from the new round
-          if (md && v.duration && md.mediaTime > v.duration * 0.5 && tries++ < 30) { v.requestVideoFrameCallback(cb); return; }
-          // the first frame of a round can be reported before it is on screen: wait until the clock has really moved on
-          if (md && md.mediaTime < 0.12 && tries++ < 30) { v.requestVideoFrameCallback(cb); return; }
-          setTimeout(gone, 80);
-        };
-        v.requestVideoFrameCallback(cb);
-        setTimeout(gone, 1500);
-      } else setTimeout(gone, 400);
-    }
     const loopTimer = setInterval(() => {
-      if (!feed.isConnected) {   // this feed was replaced (the container is reused, so test the feed itself)
-        clearInterval(loopTimer); dropBridge();
-        blobUrls.forEach(u => URL.revokeObjectURL(u)); blobUrls.clear();
-        return;
-      }
+      if (!feed.isConnected) { clearInterval(loopTimer); return; }   // this feed was replaced (the container is reused, so test the feed itself)
       const v = currentVid;
       const hidden = !v || v._userPaused || document.hidden || authorViewOpen() || overlay.style.visibility === 'hidden' || overlay.getClientRects().length === 0;
-      if (hidden) { dropBridge(); clock.at = Date.now(); return; }
-      if (bridge && bridge.vid !== v) dropBridge();
+      if (hidden) { clock.at = Date.now(); return; }
       const d = v.duration, t = v.currentTime;
       if (!d || !isFinite(d)) return;
-
       // stall watchdog: playing (or wrongly paused/ended) with a clock that is not moving
       if (clock.v !== v || t !== clock.t) { clock = { v, t, at: Date.now() }; kicks = 0; }
       else if (Date.now() - clock.at > 2000 && !v.parentElement.classList.contains('needs-tap') && !v.seeking) {
@@ -4646,45 +4575,8 @@
         if (kicks > 2) { try { v.load(); } catch (_) {} kicks = 0; }   // last resort: reload the file
         try { v.currentTime = 0; } catch (_) {}
         startPlayback(v);
-        return;
       }
-
-      const left = d - t;
-      if (!bridge && left > 0.12 && left < 1 && !v.paused && Date.now() - (v._stillAt || 0) > 100) { v._stillAt = Date.now(); captureStill(v); }
-      if (!bridge && left >= 0 && left < 0.15 && !v.paused && v.videoWidth) {
-        let b = null, kind = 'frame', lum = '';
-        try {
-          let c = v._still; v._still = null;
-          if (!c) {   // nothing stored (the loop point came sooner than expected): grab one now
-            const l = frameLum(v);
-            if (l >= LUM_MIN) { c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext('2d').drawImage(v, 0, 0); c._lum = Math.round(l); }
-            else lum = ' dark:' + Math.round(l);
-          }
-          if (c) {
-            c.className = 'player-video sp-bridge';
-            v.parentElement.insertBefore(c, v.nextSibling);
-            b = { canvas: c, vid: v, at: Date.now() };
-            lum = ' lum:' + c._lum;
-          } else {
-            const cv = v.parentElement.querySelector('.player-cover');
-            if (cv && cv.getAttribute('src')) { cv.style.transition = 'none'; cv.classList.remove('gone'); b = { cover: cv, vid: v, at: Date.now() }; kind = 'cover'; }
-          }
-        } catch (_) {}
-        bridge = b;
-        // second round onwards: play from the copy held in memory (the swap happens under the bridge)
-        let swapped = false;
-        if (b && v._blob && v._blob.state === 'ready') {
-          v._blob.state = 'swapped'; swapped = true;
-          v.src = v._blob.url; v.load(); startPlayback(v);
-        }
-        loopLog('loop ' + (b ? kind : 'no-bridge') + lum + ' blob:' + (v._blob ? v._blob.state : '-') + (swapped ? ' swap' : ''));
-      } else if (bridge && ((t < 0.4 && left > 0.5) || Date.now() - bridge.at > 1500)) {
-        const b = bridge; bridge = null;
-        v._loops = (v._loops || 0) + 1;
-        if (v._loops === 1) startBlob(v);
-        dropBridgeWhenFresh(v, b);
-      }
-    }, 40);
+    }, 500);
 
     // More slides as the end gets near: from the list, then (Home feed) a fresh ranking of everything
     let appending = false;
