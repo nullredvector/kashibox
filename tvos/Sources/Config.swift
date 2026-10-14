@@ -13,6 +13,7 @@ enum Config {
 
     static var sessionsURL: URL { server.appendingPathComponent("api/tv/sessions") }
     static var sessionURL: URL { server.appendingPathComponent("api/tv/session") }
+    static var selectURL: URL { server.appendingPathComponent("api/tv/select") }
     static var starURL: URL { server.appendingPathComponent("api/tv/star") }
 
     static func starredURL(for videoUrls: [String]) -> URL? {

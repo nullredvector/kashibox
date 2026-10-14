@@ -4,6 +4,8 @@ import SwiftUI
 struct KashiboxTVApp: App {
     @StateObject private var store = TVStore()
 
+    init() { AudioMode.set(audible: false) }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

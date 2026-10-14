@@ -70,14 +70,16 @@ const VIDEO_PATH = /^\/data\/(Likes|Favorites|Following\/[^/]+)\/videos\/([^/]+)
 function coverFor(videoUrl) { return videoUrl.replace('/videos/', '/covers/').replace(/\.mp4$/, '.jpg'); }
 
 // -> { videos: [{ videoUrl, coverUrl }], index }  (null when the path is not a video path)
-function authorFeed(archiveDir, videoPath) {
+function authorFeed(archiveDir, videoPath, hidden) {
   const m = VIDEO_PATH.exec(videoPath || '');
   if (!m) return null;
   const alone = { videos: [{ videoUrl: videoPath, coverUrl: coverFor(videoPath) }], index: 0 };
   let idx;
   try { idx = build(archiveDir); } catch (_) { return alone; }
   const aid = idx.authorOf.get(m[2]);
-  const list = aid && idx.byAuthor.get(aid);
+  // hidden videos are left out, except the one that was asked for
+  const all = aid && idx.byAuthor.get(aid);
+  const list = all && (hidden && hidden.size ? all.filter(e => e.id === m[2] || !hidden.has(e.id)) : all);
   if (!list || !list.length) return alone;
 
   let start = list.findIndex(e => e.id === m[2]);

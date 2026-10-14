@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var showSelection = false
     @State private var hideTask: Task<Void, Never>?
     @State private var pickerIndex = 0
+    @State private var reportTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { geo in
@@ -67,7 +68,33 @@ struct ContentView: View {
         .onMoveCommand(perform: handleMove)
         .onTapGesture(perform: handleSelect)
         .onPlayPauseCommand(perform: handlePlayPause)
+        .onChange(of: store.panels.map(\.id)) { old, new in followPanels(old: old, new: new) }
+        .onChange(of: selectedID) { _, _ in report() }
+        .onChange(of: showSelection) { _, _ in report() }
+        .onChange(of: anyAudible) { _, audible in AudioMode.set(audible: audible) }
     }
+
+    // When the selected panel's video is replaced by a new one (the grid was full), the selection stays on that slot.
+    private func followPanels(old: [String], new: [String]) {
+        if new.isEmpty { selectedID = nil; return }
+        guard let selected = selectedID, !new.contains(selected), let slot = old.firstIndex(of: selected) else { return }
+        selectedID = new[min(slot, new.count - 1)]
+        touch()
+    }
+
+    // The server needs to know which panel is highlighted (the pink outline is showing): a video sent from a phone
+    // replaces that panel instead of being added.
+    private func report() {
+        let highlighted = showSelection ? selectedID : nil
+        reportTask?.cancel()
+        reportTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if !Task.isCancelled { await API.select(panelID: highlighted) }
+        }
+    }
+
+    // True while some video on the grid is unmuted
+    private var anyAudible: Bool { store.panels.contains { $0.id == audibleID } }
 
     private var selectedPanel: PanelModel? {
         store.panels.first { $0.id == selectedID } ?? store.panels.last
@@ -134,7 +161,7 @@ struct ContentView: View {
         showSelection = true
         hideTask?.cancel()
         hideTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
             if !Task.isCancelled { showSelection = false }
         }
     }

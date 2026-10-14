@@ -164,6 +164,7 @@ const TV_MAX_TILES = 12;
 const tvClients = new Set();
 let tvGrid = [];
 let tvSessionId = null;   // the saved TV session the grid is being added to (null = none yet)
+let tvSelectedId = null;  // the panel highlighted on the TV (the TV reports it while the highlight shows); a new video replaces it
 
 http.createServer((req, res) => {
   const pathname = url.parse(req.url).pathname;
@@ -395,6 +396,34 @@ http.createServer((req, res) => {
   }
 
   // ── Watch statistics (feed ranking) ────────────────────────────────────────
+  // ── Hidden videos ──────────────────────────────────────────────────────────
+  // GET  /api/hidden                          → { hidden: { "<id>": <ms hidden> } }
+  // POST /api/hidden { add?, remove?, clear? } → the same, after the change. Hiding only removes a video from view; it is never deleted.
+  // Same-origin JSON only, like the other state-changing routes.
+  if (pathname === '/api/hidden') {
+    const sendJson = (code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
+    if (req.method === 'GET') return sendJson(200, { hidden: dbStars.loadHidden() });
+    if (req.method !== 'POST' && req.method !== 'PUT') { res.writeHead(405); res.end('Method not allowed'); return; }
+    const origin = req.headers['origin'];
+    let sameOrigin = true;
+    if (origin) { try { sameOrigin = new URL(origin).host === req.headers['host']; } catch (_) { sameOrigin = false; } }
+    if (!sameOrigin) return sendJson(403, { error: 'cross-origin request refused' });
+    if (!/^application\/json/i.test(req.headers['content-type'] || '')) return sendJson(415, { error: 'JSON required' });
+    let size = 0, chunks = [], tooBig = false;
+    req.on('data', c => { size += c.length; if (size > 1e6) tooBig = true; else chunks.push(c); });
+    req.on('end', () => {
+      if (tooBig) return sendJson(413, { error: 'body too large' });
+      let d;
+      try { d = JSON.parse(Buffer.concat(chunks).toString()); } catch (_) { return sendJson(400, { error: 'Invalid JSON' }); }
+      if (!d || typeof d !== 'object' || Array.isArray(d)) return sendJson(400, { error: 'Invalid JSON' });
+      const lists = ['add', 'remove'].every(k => d[k] === undefined || (Array.isArray(d[k]) && d[k].length <= 5000));
+      if (!lists || (d.clear !== undefined && typeof d.clear !== 'boolean')) return sendJson(400, { error: 'add and remove must be lists of up to 5000 ids, clear a boolean' });
+      try { sendJson(200, { hidden: dbStars.updateHidden({ add: d.add, remove: d.remove, clear: d.clear }) }); }
+      catch (_) { sendJson(500, { error: 'could not save' }); }
+    });
+    return;
+  }
+
   if (pathname === '/api/watch') {
     if (req.method === 'GET') {
       const body = JSON.stringify({ watch: dbStars.loadWatch() });
@@ -459,11 +488,11 @@ http.createServer((req, res) => {
     res.write('data: ' + JSON.stringify({ type: 'state', items: tvGrid }) + '\n\n');
     tvClients.add(res);
     const beat = setInterval(() => { try { res.write(': hb\n\n'); } catch (_) {} }, 15000);
-    req.on('close', () => { clearInterval(beat); tvClients.delete(res); });
+    req.on('close', () => { clearInterval(beat); tvClients.delete(res); if (!tvClients.size) tvSelectedId = null; });
     return;
   }
   if (pathname === '/api/tv/author' && req.method === 'GET') {
-    const feed = tvAuthor.authorFeed(ARCHIVE_DIR, String(url.parse(req.url, true).query.v || ''));
+    const feed = tvAuthor.authorFeed(ARCHIVE_DIR, String(url.parse(req.url, true).query.v || ''), dbStars.hiddenIds());
     if (!feed) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid video' })); return; }
     const body = JSON.stringify(feed);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });
@@ -533,9 +562,18 @@ http.createServer((req, res) => {
       if (!saved || !saved.items.length) { tvJson(404, { error: 'No such session' }); return; }
       tvGrid = saved.items.slice(-TV_MAX_TILES)
         .map(i => ({ id: crypto.randomBytes(6).toString('hex'), videoUrl: i.videoUrl, coverUrl: i.coverUrl || '' }));
+      tvSelectedId = null;
       tvSessionId = tvSessions.record(ARCHIVE_DIR, saved.id, tvGrid);
       tvBroadcast();
       tvJson(200, { ok: true, count: tvGrid.length });
+    });
+    return;
+  }
+  // The TV tells the server which panel is selected on it ({ id } or { id: null })
+  if (pathname === '/api/tv/select' && req.method === 'POST') {
+    tvBody(500, m => {
+      tvSelectedId = (typeof m.id === 'string' && tvGrid.some(i => i.id === m.id)) ? m.id : null;
+      tvJson(200, { ok: true });
     });
     return;
   }
@@ -555,13 +593,16 @@ http.createServer((req, res) => {
         const m = JSON.parse(Buffer.concat(chunks).toString());
         if (m.action === 'clear') {
           tvGrid = [];
+          tvSelectedId = null;
           tvSessionId = null;   // the session stays saved; the next video starts a new one
         } else if (m.action === 'add') {
           const ok = u => typeof u === 'string' && u.length < 400 && u.startsWith('/') && !u.startsWith('//') && !u.includes('..');
           if (!ok(m.videoUrl) || (m.coverUrl && !ok(m.coverUrl))) throw new Error('bad url');
           tvGrid = tvGrid.filter(i => i.videoUrl !== m.videoUrl);
-          tvGrid.push({ id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '' });
-          while (tvGrid.length > TV_MAX_TILES) tvGrid.shift();
+          const fresh = { id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '' };
+          const at = tvGrid.findIndex(i => i.id === tvSelectedId);
+          if (at >= 0) { tvGrid[at] = fresh; tvSelectedId = fresh.id; }   // a highlighted panel gives way to the new video, in place
+          else { tvGrid.push(fresh); while (tvGrid.length > TV_MAX_TILES) tvGrid.shift(); }
           try { tvSessionId = tvSessions.record(ARCHIVE_DIR, tvSessionId, tvGrid); } catch (_) { /* the grid still works if saving fails */ }
         } else throw new Error('bad action');
         const line = 'data: ' + JSON.stringify({ type: 'state', items: tvGrid }) + '\n\n';

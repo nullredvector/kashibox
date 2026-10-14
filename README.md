@@ -22,6 +22,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 - **Settings** (the gear right of the Player button; on a phone, the gear in the Library header): the profile link, a summary of your archive and a device info box. Settings are saved on the server, so every device shares them.
 
 ### Organize
+- **Hide videos:** a Hide button on every thumbnail, in the player and in the phone feed takes a video out of every list, the Home feed and the TV (with an Undo). Nothing is deleted, and **Settings → Hidden videos** shows them and brings them back.
 - **Groups as tags:** a video can be in any number of groups. The same groups drive filtering, the phone tagging UI and the feed ranking.
 - **Sorting and sizing:** Added, Latest, Popular or Oldest, plus a thumbnail size slider, on every grid.
 - **Hover and play-all previews:** mouse over a thumbnail to preview it, or play every visible thumbnail at once.
