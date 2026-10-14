@@ -1,4 +1,4 @@
-import Foundation
+import SwiftUI
 
 struct VideoRef: Decodable, Equatable {
     let videoUrl: String
@@ -17,6 +17,7 @@ final class PanelModel: ObservableObject, Identifiable {
     let id: String
     @Published private(set) var videos: [VideoRef]
     @Published private(set) var index = 0
+    @Published private(set) var direction = 1
     @Published var starred = false
     /// Counts presses that starred a video (drives the burst animation, which must not play for videos that were already starred).
     @Published private(set) var starPresses = 0
@@ -41,11 +42,17 @@ final class PanelModel: ObservableObject, Identifiable {
         if current != shown { onVideoChange?() }
     }
 
-    /// +1 = next video, -1 = previous; wraps around at the ends.
+    /// +1 = the next video slides up in from below, like scrolling a feed; -1 = the previous one slides down in from above.
+    /// Wraps around at the ends.
     func step(_ delta: Int) {
         guard videos.count > 1 else { return }
-        index = (index + delta + videos.count) % videos.count
-        onVideoChange?()
+        direction = delta > 0 ? 1 : -1
+        // The slide direction has to be in place before the video changes, so the video that leaves uses it too.
+        Task {
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            withAnimation(.easeInOut(duration: 0.32)) { index = (index + delta + videos.count) % videos.count }
+            onVideoChange?()
+        }
     }
 
     /// Stars or un-stars the video on show: the badge changes at once, the server's answer settles it.

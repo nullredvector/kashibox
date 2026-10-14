@@ -118,8 +118,8 @@ struct ContentView: View {
         switch direction {
         case .left:  current = max(0, current - 1)
         case .right: current = min(panels.count - 1, current + 1)
-        case .up:    withAnimation(.easeInOut(duration: 0.25)) { panels[current].step(1) }
-        case .down:  withAnimation(.easeInOut(duration: 0.25)) { panels[current].step(-1) }
+        case .up:    panels[current].step(1)
+        case .down:  panels[current].step(-1)
         @unknown default: break
         }
         selectedID = panels[current].id
