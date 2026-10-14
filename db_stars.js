@@ -412,4 +412,50 @@ function saveSchedule(d) {
   return { code: 200, ok: true };
 }
 
-module.exports = { starredIds, loadSettings, saveSettings, load, loadWithRev, saveGuarded, currentRev, save, loadSessions, saveSessions, loadAutotag, recordFeedback, loadAiTags, loadTagsConfig, saveTagsConfig, loadWatch, mergeWatch, runStatus, requestRun, saveSchedule, requestNotifyTest, saveFramesConfig };
+
+// ── Hidden videos (hidden.json): { hidden: { "<video id>": <time hidden, ms> } } ──
+// Hiding only removes a video from view. Nothing is deleted from the archive, and it can be unhidden.
+const HIDDEN_FILE = path.join(ARCHIVE_DIR, 'data', '.appdata', 'hidden.json');
+const HIDDEN_MAX  = 200000;
+let _hiddenCache = { mtime: -1, map: {} };
+
+function loadHidden() {
+  try {
+    const st = fs.statSync(HIDDEN_FILE);
+    if (st.mtimeMs === _hiddenCache.mtime) return _hiddenCache.map;
+    const data = JSON.parse(fs.readFileSync(HIDDEN_FILE, 'utf8'));
+    const map = {};
+    for (const [id, at] of Object.entries((data && data.hidden) || {})) if (isId(id)) map[id] = Number(at) || 0;
+    _hiddenCache = { mtime: st.mtimeMs, map };
+    return map;
+  } catch (_) {
+    _hiddenCache = { mtime: -1, map: {} };
+    return {};
+  }
+}
+
+function hiddenIds() { return new Set(Object.keys(loadHidden())); }
+
+// { add: [ids], remove: [ids], clear: true }. Safe to repeat: adding what is already hidden changes nothing.
+function updateHidden(change) {
+  const cur = { ...loadHidden() };
+  const c = change || {};
+  if (c.clear === true) for (const k of Object.keys(cur)) delete cur[k];
+  for (const id of Array.isArray(c.remove) ? c.remove : []) if (isId(id)) delete cur[id];
+  const now = Date.now();
+  let count = Object.keys(cur).length;
+  for (const id of Array.isArray(c.add) ? c.add : []) {
+    if (!isId(id) || id in cur) continue;
+    if (count >= HIDDEN_MAX) break;
+    cur[id] = now; count++;
+  }
+  const dir = path.dirname(HIDDEN_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = HIDDEN_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify({ hidden: cur }), 'utf8');
+  fs.renameSync(tmp, HIDDEN_FILE);
+  _hiddenCache = { mtime: -1, map: {} };
+  return cur;
+}
+
+module.exports = { loadHidden, hiddenIds, updateHidden, starredIds, loadSettings, saveSettings, load, loadWithRev, saveGuarded, currentRev, save, loadSessions, saveSessions, loadAutotag, recordFeedback, loadAiTags, loadTagsConfig, saveTagsConfig, loadWatch, mergeWatch, runStatus, requestRun, saveSchedule, requestNotifyTest, saveFramesConfig };

@@ -396,6 +396,34 @@ http.createServer((req, res) => {
   }
 
   // ── Watch statistics (feed ranking) ────────────────────────────────────────
+  // ── Hidden videos ──────────────────────────────────────────────────────────
+  // GET  /api/hidden                          → { hidden: { "<id>": <ms hidden> } }
+  // POST /api/hidden { add?, remove?, clear? } → the same, after the change. Hiding only removes a video from view; it is never deleted.
+  // Same-origin JSON only, like the other state-changing routes.
+  if (pathname === '/api/hidden') {
+    const sendJson = (code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
+    if (req.method === 'GET') return sendJson(200, { hidden: dbStars.loadHidden() });
+    if (req.method !== 'POST' && req.method !== 'PUT') { res.writeHead(405); res.end('Method not allowed'); return; }
+    const origin = req.headers['origin'];
+    let sameOrigin = true;
+    if (origin) { try { sameOrigin = new URL(origin).host === req.headers['host']; } catch (_) { sameOrigin = false; } }
+    if (!sameOrigin) return sendJson(403, { error: 'cross-origin request refused' });
+    if (!/^application\/json/i.test(req.headers['content-type'] || '')) return sendJson(415, { error: 'JSON required' });
+    let size = 0, chunks = [], tooBig = false;
+    req.on('data', c => { size += c.length; if (size > 1e6) tooBig = true; else chunks.push(c); });
+    req.on('end', () => {
+      if (tooBig) return sendJson(413, { error: 'body too large' });
+      let d;
+      try { d = JSON.parse(Buffer.concat(chunks).toString()); } catch (_) { return sendJson(400, { error: 'Invalid JSON' }); }
+      if (!d || typeof d !== 'object' || Array.isArray(d)) return sendJson(400, { error: 'Invalid JSON' });
+      const lists = ['add', 'remove'].every(k => d[k] === undefined || (Array.isArray(d[k]) && d[k].length <= 5000));
+      if (!lists || (d.clear !== undefined && typeof d.clear !== 'boolean')) return sendJson(400, { error: 'add and remove must be lists of up to 5000 ids, clear a boolean' });
+      try { sendJson(200, { hidden: dbStars.updateHidden({ add: d.add, remove: d.remove, clear: d.clear }) }); }
+      catch (_) { sendJson(500, { error: 'could not save' }); }
+    });
+    return;
+  }
+
   if (pathname === '/api/watch') {
     if (req.method === 'GET') {
       const body = JSON.stringify({ watch: dbStars.loadWatch() });
@@ -464,7 +492,7 @@ http.createServer((req, res) => {
     return;
   }
   if (pathname === '/api/tv/author' && req.method === 'GET') {
-    const feed = tvAuthor.authorFeed(ARCHIVE_DIR, String(url.parse(req.url, true).query.v || ''));
+    const feed = tvAuthor.authorFeed(ARCHIVE_DIR, String(url.parse(req.url, true).query.v || ''), dbStars.hiddenIds());
     if (!feed) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid video' })); return; }
     const body = JSON.stringify(feed);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });

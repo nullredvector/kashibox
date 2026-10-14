@@ -191,6 +191,57 @@
 
   let stars  = loadStarsLocal();
   let groups = loadGroupsLocal();
+
+  // ── Hidden videos ───────────────────────────────────────────────────────────
+  // Hiding only takes a video out of view: nothing is deleted, and it can be brought back. The list lives in
+  // hidden.json on the server, so every device agrees. isHidden() is checked wherever a list of videos is built.
+  let hidden = {};                                   // { "<video id>": <time hidden, ms> }
+  const isHidden = id => Object.prototype.hasOwnProperty.call(hidden, String(id));
+  const hiddenCount = () => Object.keys(hidden).length;
+  const visibleOnly = list => (hiddenCount() ? list.filter(v => !isHidden(v.id)) : list);
+  const HIDE_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 6.1A10.9 10.9 0 0 1 12 6c5.5 0 9.5 4.6 10.5 6-.5.7-1.7 2.1-3.4 3.4M6.6 6.7C4.3 8.1 2.8 10.2 1.5 12c1 1.4 5 6 10.5 6 1.5 0 2.9-.4 4.1-.9"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+
+  function postHidden(change) {
+    return fetch('/api/hidden', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change) })
+      .then(r => { if (!r.ok) throw new Error('hidden ' + r.status); return r.json(); })
+      .then(d => { if (d && d.hidden) hidden = d.hidden; return true; });
+  }
+  function loadHidden() {
+    return fetch('/api/hidden', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d && d.hidden) { hidden = d.hidden; afterHiddenChange(); } }).catch(() => {});
+  }
+  function hideVideo(id) {
+    id = String(id);
+    if (isHidden(id)) return;
+    hidden[id] = Date.now();
+    afterHiddenChange();
+    spToast('Video hidden', () => unhideVideos([id]));
+    postHidden({ add: [id] }).catch(() => { delete hidden[id]; afterHiddenChange(); spToast('Could not hide it (the server did not answer)'); });
+  }
+  function unhideVideos(ids) {
+    ids = ids.map(String).filter(isHidden);
+    if (!ids.length) return Promise.resolve();
+    const was = ids.map(id => [id, hidden[id]]);
+    ids.forEach(id => { delete hidden[id]; });
+    afterHiddenChange();
+    return postHidden({ remove: ids }).catch(() => { was.forEach(([id, t]) => { hidden[id] = t; }); afterHiddenChange(); spToast('Could not unhide it (the server did not answer)'); });
+  }
+  function unhideAll() {
+    const was = hidden;
+    hidden = {};
+    afterHiddenChange();
+    return postHidden({ clear: true }).catch(() => { hidden = was; afterHiddenChange(); spToast('Could not unhide (the server did not answer)'); });
+  }
+  // Refresh whatever is on screen after the set of hidden videos changed
+  function afterHiddenChange() {
+    try {
+      if (listTabKind) renderListView();
+      if (activeAuthorId) renderAuthorView();
+      if (starsTabActive) renderStarsView();
+      if (settingsTabActive) renderSettingsView();
+    } catch (_) { /* a view that is not built yet */ }
+  }
+  loadHidden();
   let levels = loadLevelsLocal();
 
   // Migrate levels that were stored inside star objects (old format)
@@ -353,7 +404,12 @@
       });
     });
 
-    wrap.append(star, braces, grp, lvl);
+    const hide = mk('thumb-hide');
+    hide.innerHTML = HIDE_SVG;
+    hide.title = 'Hide this video';
+    hide.addEventListener('click', e => { e.stopPropagation(); hideVideo(videoId); });
+
+    wrap.append(star, braces, grp, lvl, hide);
     return wrap;
   }
 
@@ -514,7 +570,7 @@
     const name  = (a && a.uniqueIds && a.uniqueIds[0]) || '';
     const out = [];
     for (const [id, v] of Object.entries(d.videos)) {
-      if (v.authorId !== authorId) continue;
+      if (v.authorId !== authorId || isHidden(id)) continue;
       const dir = likes.has(id) ? 'Likes' : marks.has(id) ? 'Favorites' : fol.has(id) ? `Following/${authorId}` : null;
       if (!dir) continue;
       out.push({
@@ -842,6 +898,13 @@
     groupBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>';
     groupBtn.addEventListener('click', e => { e.stopPropagation(); showGroupPicker(groupBtn, item.id); });
     rightCenter.appendChild(groupBtn);
+
+    const hideBtn = document.createElement('button');
+    hideBtn.className = 'overlay-ctrl-btn overlay-hide-btn';
+    hideBtn.title = 'Hide this video';
+    hideBtn.innerHTML = HIDE_SVG;
+    hideBtn.addEventListener('click', e => { e.stopPropagation(); hideVideo(item.id); closeVideoOverlay(); });
+    rightCenter.appendChild(hideBtn);
     controls.appendChild(rightCenter);
 
     // Bottom-left: author + caption
@@ -1196,6 +1259,7 @@
     });
     const out = [];
     for (const id of order) {
+      if (isHidden(id)) continue;
       const v = d.videos[id];
       if (!v) continue;
       const a = d.authors[v.authorId];
@@ -1221,7 +1285,7 @@
   // The Super stars category: only the videos that were actually super-starred (a creator's other videos get the blue
   // icon, but do not appear here)
   function superVideoItems() {
-    return Object.entries(stars).filter(([, x]) => x.super).map(([id, x]) => ({ ...x, id }));
+    return Object.entries(stars).filter(([id, x]) => x.super && !isHidden(id)).map(([id, x]) => ({ ...x, id }));
   }
 
   // Downloaded videos per author, counted once per database load
@@ -1594,6 +1658,59 @@
     return t ? `Checking every ${cfg.syncIntervalMinutes} minutes. Next check about ${t}.` : `Checking every ${cfg.syncIntervalMinutes} minutes.`;
   }
 
+  // Hidden videos: the ones you hid, newest first, each with an Unhide button
+  function showHiddenManager() {
+    document.getElementById('sp-hidden-mgr')?.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'sp-hidden-mgr';
+    const head = document.createElement('div');
+    head.className = 'hm-head';
+    const title = document.createElement('div');
+    title.className = 'hm-title';
+    const allBtn = document.createElement('button');
+    allBtn.className = 'set-btn';
+    allBtn.textContent = 'Unhide all';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'set-btn';
+    closeBtn.textContent = 'Close';
+    head.append(title, allBtn, closeBtn);
+    const grid = document.createElement('div');
+    grid.className = 'hm-grid';
+    wrap.append(head, grid);
+    document.body.appendChild(wrap);
+    const close = () => { wrap.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = e => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    closeBtn.addEventListener('click', close);
+    const LIMIT = 150;
+    const paint = () => {
+      const ids = Object.entries(hidden).sort((a, b) => b[1] - a[1]).map(([id]) => id);
+      title.textContent = ids.length ? `Hidden videos (${ids.length.toLocaleString()})` : 'No hidden videos';
+      allBtn.style.display = ids.length ? '' : 'none';
+      grid.innerHTML = '';
+      if (!ids.length) { const n = document.createElement('div'); n.className = 'hm-note'; n.textContent = 'Videos you hide appear here, so you can bring them back.'; grid.appendChild(n); return; }
+      ids.slice(0, LIMIT).forEach(id => {
+        const card = document.createElement('div');
+        card.className = 'hm-card';
+        const img = document.createElement('img');
+        img.loading = 'lazy'; img.src = coverSrcFor(id); img.alt = '';
+        img.onerror = () => { img.style.visibility = 'hidden'; };
+        const b = document.createElement('button');
+        b.className = 'set-btn'; b.textContent = 'Unhide';
+        b.addEventListener('click', () => { unhideVideos([id]); card.remove(); paintCount(); });
+        card.append(img, b);
+        grid.appendChild(card);
+      });
+      if (ids.length > LIMIT) { const n = document.createElement('div'); n.className = 'hm-note'; n.textContent = `Showing the ${LIMIT} most recently hidden of ${ids.length.toLocaleString()}.`; grid.appendChild(n); }
+    };
+    const paintCount = () => { if (!hiddenCount()) paint(); else title.textContent = `Hidden videos (${hiddenCount().toLocaleString()})`; };
+    allBtn.addEventListener('click', () => {
+      if (!window.confirm(`Unhide all ${hiddenCount().toLocaleString()} videos?`)) return;
+      unhideAll(); paint();
+    });
+    paint();
+  }
+
   function renderSettingsView() {
     if (!settingsViewEl || !settingsTabActive) return;
     const keepFocus = settingsViewEl.contains(document.activeElement) && document.activeElement.tagName === 'INPUT';
@@ -1828,6 +1945,22 @@
       });
     }
 
+    // ── hidden videos ──
+    const hid = section('Hidden videos', 'Hide a video from a thumbnail, the player or the Home feed. It disappears from every list, the feed and the TV, and is never deleted. Bring videos back here.');
+    const hidStatus = document.createElement('div');
+    hidStatus.className = 'set-status';
+    const nHid = hiddenCount();
+    hidStatus.textContent = nHid ? `${nHid.toLocaleString()} hidden video${nHid !== 1 ? 's' : ''}.` : 'Nothing is hidden.';
+    const hidRow = document.createElement('div');
+    hidRow.className = 'set-try';
+    const reviewBtn = document.createElement('button');
+    reviewBtn.className = 'set-btn';
+    reviewBtn.textContent = 'Review hidden videos';
+    reviewBtn.disabled = !nHid;
+    reviewBtn.addEventListener('click', () => showHiddenManager());
+    hidRow.appendChild(reviewBtn);
+    hid.append(hidStatus, hidRow);
+
     // ── this device ──
     const dev = section('This device');
     const dbgRow = document.createElement('label');
@@ -1961,7 +2094,7 @@
     const lvlGrid = document.createElement('div');
     lvlGrid.id = 'stars-lvl-grid';
     for (const n of numFilterList()) {
-      const count = Object.keys(levels).filter(id => levels[id] === n).length;
+      const count = Object.keys(levels).filter(id => levels[id] === n && !isHidden(id)).length;
       const btn = document.createElement('button');
       btn.className = 'stars-lvl-btn' + (activeLvl.has(n) ? ' active' : '');
       btn.textContent = n;
@@ -1986,7 +2119,7 @@
     sidebar.appendChild(taggedItem);
 
     // ── All Stars ─────────────────────────────────────────────────────────────
-    const allItem = makeSidebarItem('all', 'All Stars', Object.keys(stars).length);
+    const allItem = makeSidebarItem('all', 'All Stars', Object.keys(stars).filter(id => !isHidden(id)).length);
     allItem.addEventListener('click', () => { activeView = null; activeGroupIds.clear(); renderStarsView(); });
     sidebar.appendChild(allItem);
 
@@ -1999,8 +2132,8 @@
 
     // ── Untagged ──────────────────────────────────────────────────────────────
     const groupedIds = new Set(groups.flatMap(g => g.videoIds));
-    const ungroupedStarCount  = Object.keys(stars).filter(id => !groupedIds.has(id)).length;
-    const ungroupedLvlCount   = Object.keys(levels).filter(id => !stars[id] && !groupedIds.has(id)).length;
+    const ungroupedStarCount  = Object.keys(stars).filter(id => !groupedIds.has(id) && !isHidden(id)).length;
+    const ungroupedLvlCount   = Object.keys(levels).filter(id => !stars[id] && !groupedIds.has(id) && !isHidden(id)).length;
     const ungroupedTotal      = ungroupedStarCount + ungroupedLvlCount;
     const ungroupedItem = makeSidebarItem('__ungrouped__', 'Untagged', ungroupedTotal);
     ungroupedItem.addEventListener('click', () => { activeView = '__ungrouped__'; activeGroupIds.clear(); renderStarsView(); });
@@ -2024,7 +2157,7 @@
     });
 
     sortedGroups.forEach(g => {
-      const count = g.videoIds.length;
+      const count = g.videoIds.filter(id => !isHidden(id)).length;
       const row = document.createElement('div');
       row.className = 'stars-group-row';
 
@@ -2232,7 +2365,7 @@
       const lvlStrip = document.createElement('div');
       lvlStrip.id = 'stars-mobile-lvl-strip';
       for (const n of numFilterList()) {
-        const count = Object.keys(levels).filter(id => levels[id] === n).length;
+        const count = Object.keys(levels).filter(id => levels[id] === n && !isHidden(id)).length;
         if (!count) continue;
         const btn = document.createElement('button');
         btn.className = 'stars-filter-btn stars-filter-lvl-num' + (activeLvl.has(n) ? ' active' : '');
@@ -2305,9 +2438,9 @@
           ? { ...stars[id], id }
           : { id, coverSrc: coverSrcFor(id), authorName: '', desc: '', lvlOnly: true });
       }));
-      const videosToShow = sortVideos(activeLvl.size > 0
+      const videosToShow = visibleOnly(sortVideos(activeLvl.size > 0
         ? baseVideos.filter(s => activeLvl.has(levels[s.id]))
-        : baseVideos, 'stars');
+        : baseVideos, 'stars'));
 
       const countText = `${videosToShow.length} video${videosToShow.length !== 1 ? 's' : ''}`;
       mainHeader.innerHTML =
@@ -2334,7 +2467,7 @@
     } else if (activeView === '__super__') {
       // ── Super stars: every starred video that was long-pressed into a super star ─────────
       const baseVideos = superVideoItems();
-      const videosToShow = sortVideos(activeLvl.size > 0 ? baseVideos.filter(x => activeLvl.has(levels[x.id])) : baseVideos, 'stars');
+      const videosToShow = visibleOnly(sortVideos(activeLvl.size > 0 ? baseVideos.filter(x => activeLvl.has(levels[x.id])) : baseVideos, 'stars'));
       const countText = `${videosToShow.length} video${videosToShow.length !== 1 ? 's' : ''}`;
       mainHeader.innerHTML = `<span class="stars-main-title">Super stars</span><span class="stars-main-count">${countText}</span>`;
       mobileTitle.innerHTML = `<span class="stars-main-title">Super stars</span><span class="stars-main-count">${countText}</span>`;
@@ -2356,9 +2489,9 @@
         .map(id => stars[id]
           ? { ...stars[id], id }
           : { id, coverSrc: coverSrcFor(id), authorName: '', desc: '', lvlOnly: true });
-      const videosToShow = sortVideos(activeLvl.size > 0
+      const videosToShow = visibleOnly(sortVideos(activeLvl.size > 0
         ? baseVideos.filter(s => activeLvl.has(levels[s.id]))
-        : baseVideos, 'stars');
+        : baseVideos, 'stars'));
 
       const countText = `${videosToShow.length.toLocaleString()} video${videosToShow.length !== 1 ? 's' : ''}`;
       mainHeader.innerHTML =
@@ -2396,9 +2529,9 @@
           authorName: '', desc: '', lvlOnly: true
         }));
       const baseVideos = [...ungroupedStars, ...lvlOnlyVideos];
-      const videosToShow = sortVideos(activeLvl.size > 0
+      const videosToShow = visibleOnly(sortVideos(activeLvl.size > 0
         ? baseVideos.filter(s => activeLvl.has(levels[s.id]))
-        : baseVideos, 'stars');
+        : baseVideos, 'stars'));
 
       mainHeader.innerHTML =
         `<span class="stars-main-title">Untagged</span>` +
@@ -2456,9 +2589,9 @@
         });
       }
 
-      const videosToShow = sortVideos(activeLvl.size > 0
+      const videosToShow = visibleOnly(sortVideos(activeLvl.size > 0
         ? baseVideos.filter(s => activeLvl.has(levels[s.id]))
-        : baseVideos, 'stars');
+        : baseVideos, 'stars'));
 
       let titleText;
       if (isAll) titleText = 'All Stars';
@@ -3656,7 +3789,7 @@
     const add = (ids, dir) => {
       for (const id of ids) {
         const v = d.videos[id];
-        if (!v || seen.has(id)) continue;
+        if (!v || seen.has(id) || isHidden(id)) continue;
         seen.add(id);
         const a = d.authors[v.authorId];
         list.push({
@@ -4084,6 +4217,19 @@
     rightCenter.appendChild(bracesBtn);
     rightCenter.appendChild(lvlBtn);
     rightCenter.appendChild(groupBtn);
+    const hideBtn = document.createElement('button');
+    hideBtn.className = 'player-ctrl-btn player-hide-btn';
+    hideBtn.title = 'Hide this video';
+    hideBtn.innerHTML = HIDE_SVG;
+    hideBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      // the video marked current, or else the slide that is actually in view
+      const item = currentItem || renderList[Math.round(feed.scrollTop / Math.max(1, feed.clientHeight))];
+      if (!item) return;
+      hideVideo(item.id);
+      skipHidden(renderList.findIndex(x => x.id === item.id));
+    });
+    rightCenter.appendChild(hideBtn);
     rightCenter.insertBefore(muteBtn, rightCenter.firstChild);   // mute sits at the top of the button column, above like
 
     // Send the video in view to the TV: first in the column, above mute (shown only while a TV app or a Cast session is there)
@@ -4229,10 +4375,25 @@
     }
     endFeedVisit = endVisit;
 
+    // A video that was hidden while the feed is open never plays: move on to the next slide
+    function skipHidden(idx, tries = 0) {
+      if (idx < 0) return;
+      if (renderList.length - idx <= 10) appendMore();
+      const next = feed.querySelector('.player-slide[data-idx="' + (idx + 1) + '"]');
+      if (next) {
+        next.scrollIntoView({ block: 'start' });
+        // the feed can still be settling (restoring its position): check it really moved on, and try again if not
+        if (tries < 6) setTimeout(() => { if (Math.round(feed.scrollTop / Math.max(1, feed.clientHeight)) <= idx) skipHidden(idx, tries + 1); }, 450);
+        return;
+      }
+      if (tries < 6) setTimeout(() => skipHidden(idx, tries + 1), 250);
+    }
+
     // Make the slide at idx the active one: controls, counter, playback
     function activate(idx) {
       const vid = videoEls[idx];
       if (!vid) return;
+      if (renderList[idx] && isHidden(renderList[idx].id)) { skipHidden(idx); return; }
       // The observer can report the same slide again (drags, page pulls, layout changes): that is not a new view
       if (visit && visit.vid === vid && currentVid === vid) {
         if (vid.paused && !vid._userPaused) startPlayback(vid);
@@ -6217,7 +6378,7 @@ render();
       lowBanner.id = 'at-lowconf';
       lowBanner.textContent = 'Low confidence: the AI only does a little better than chance on this tag, so treat these as guesses. Every accept and reject teaches it. No AI tags are made for it yet.';
     }
-    autotagViewEl.append(head, ...(lowBanner ? [lowBanner] : []), ...(banner ? [banner] : []), cardMode ? buildSwipeStack(list) : grid, ...openPanels);
+    autotagViewEl.append(head, ...(lowBanner ? [lowBanner] : []), ...(banner ? [banner] : []), cardMode ? buildSwipeStack(visibleOnly(list)) : grid, ...openPanels);
     if (!cardMode) observeGridPreviews(grid);
   }
 
@@ -7536,6 +7697,16 @@ render();
       .stars-grid-cover:hover .thumb-tool, .thumb-tool.on, .thumb-tool.braces-on { opacity: 1; }
       .thumb-tool:hover { background: rgba(0,0,0,.9); color: #fff; }
       .thumb-star.on { color: gold; }
+      .thumb-hide svg { width: 58%; height: 58%; }
+      .overlay-hide-btn, .player-hide-btn { color: #fff; }
+      #sp-hidden-mgr { position: fixed; inset: 0; z-index: 100000; background: rgba(0,0,0,.94); display: flex; flex-direction: column; color: #ddd; }
+      #sp-hidden-mgr .hm-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #444; flex-wrap: wrap; }
+      #sp-hidden-mgr .hm-title { font-size: 18px; font-weight: 600; flex: 1; min-width: 140px; }
+      #sp-hidden-mgr .hm-grid { flex: 1; overflow: auto; padding: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 12px; align-content: start; }
+      #sp-hidden-mgr .hm-card { background: #222; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+      #sp-hidden-mgr .hm-card img { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; background: #111; display: block; }
+      #sp-hidden-mgr .hm-card .set-btn { margin: 6px; }
+      #sp-hidden-mgr .hm-note { grid-column: 1 / -1; color: #aaa; font-size: 13px; padding: 4px 2px; }
       .thumb-star.super, .overlay-star-btn.super, .player-star-btn.super { color: #4fc3f7; }
       .thumb-star.origin svg, .overlay-star-btn.origin svg, .player-star-btn.origin svg { filter: drop-shadow(0 0 4px rgba(255,255,255,.55)); }
       .thumb-star.super svg, .overlay-star-btn.super svg, .player-star-btn.super svg { filter: drop-shadow(0 0 4px rgba(79,195,247,.7)); }
