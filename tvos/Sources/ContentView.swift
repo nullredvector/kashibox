@@ -26,6 +26,7 @@ struct ContentView: View {
     @State private var hideTask: Task<Void, Never>?
     @State private var pickerIndex = 0
     @State private var reportTask: Task<Void, Never>?
+    @State private var lastRemoval = Date.distantPast
 
     var body: some View {
         GeometryReader { geo in
@@ -67,6 +68,7 @@ struct ContentView: View {
         .onAppear { focused = true }
         .onMoveCommand(perform: handleMove)
         .onTapGesture(perform: handleSelect)
+        .onLongPressGesture(minimumDuration: 0.7, perform: handleRemove)
         .onPlayPauseCommand(perform: handlePlayPause)
         .onChange(of: store.panels.map(\.id)) { old, new in followPanels(old: old, new: new) }
         .onChange(of: selectedID) { _, _ in report() }
@@ -126,6 +128,7 @@ struct ContentView: View {
 
     // Click: star or un-star the selected video (with an empty grid: open the highlighted session).
     private func handleSelect() {
+        if Date().timeIntervalSince(lastRemoval) < 1 { return }   // the release after a long press is not a click
         if store.panels.isEmpty {
             openSession()
             return
@@ -134,6 +137,14 @@ struct ContentView: View {
         selectedID = panel.id
         panel.toggleStar()
         touch()
+    }
+
+    // Long click: take the highlighted video off the grid. Without a visible highlight it only shows where the selection is.
+    private func handleRemove() {
+        guard !store.panels.isEmpty else { return }
+        guard showSelection, let panel = selectedPanel else { touch(); return }
+        lastRemoval = Date()
+        Task { await API.remove(panelID: panel.id) }
     }
 
     // Play / Pause: mute or unmute the selected video. Only one video is ever audible:
