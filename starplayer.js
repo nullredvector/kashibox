@@ -3720,9 +3720,14 @@
 
   // Order a list of candidate videos for the Home feed / pop-out player
   async function orderHomeList(list) {
-    if (feedMode() !== 'ranked') return shuffleList(list);
-    try { await Promise.race([watchReady, new Promise(r => setTimeout(r, 1500))]); } catch (_) {}
-    return rankVideos(list);
+    let ordered;
+    if (feedMode() !== 'ranked') ordered = shuffleList(list);
+    else {
+      try { await Promise.race([watchReady, new Promise(r => setTimeout(r, 1500))]); } catch (_) {}
+      ordered = rankVideos(list);
+    }
+    publishTvFeed(ordered);
+    return ordered;
   }
 
   // The Home feed's videos: from the archive database when it is available (fast, nothing flickers);
@@ -7106,9 +7111,17 @@ render();
   let tvPollTimer = null;
   const castActive = () => !!castSession || tvOnline;
 
-  function tvSend(body) {
-    return fetch('/api/tv/cast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  function tvPost(path, body) {
+    return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(r => r.json()).catch(() => null);
+  }
+  function tvSend(body) { return tvPost('/api/tv/cast', body); }
+
+  // The Home feed order, handed to the server so the TV's click-up/down can follow it (sent once a TV is online)
+  let tvFeedList = null;
+  function publishTvFeed(list) {
+    tvFeedList = list;
+    if (tvOnline) tvPost('/api/tv/feed', { videos: list.slice(0, 300).map(v => '/' + v.videoPath) });
   }
   function updateCastButton() {
     const btn = document.getElementById('sp-cast-nav-btn');
@@ -7121,6 +7134,7 @@ render();
       const on = !!(st && st.tvs > 0);
       if (on === tvOnline) return;
       tvOnline = on;
+      if (on && tvFeedList) publishTvFeed(tvFeedList);
       updateCastButton();
       refreshCastOverlays();
     }).catch(() => {});

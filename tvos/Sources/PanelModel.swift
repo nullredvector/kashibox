@@ -18,6 +18,7 @@ final class PanelModel: ObservableObject, Identifiable {
     @Published private(set) var videos: [VideoRef]
     @Published private(set) var index = 0
     @Published private(set) var direction = 1
+    private var feedPos: Int?   // where the last click-to-advance left off in the Home feed
     @Published var starred = false
     /// Counts presses that starred a video (drives the burst animation, which must not play for videos that were already starred).
     @Published private(set) var starPresses = 0
@@ -52,6 +53,24 @@ final class PanelModel: ObservableObject, Identifiable {
             try? await Task.sleep(nanoseconds: 30_000_000)
             withAnimation(.easeInOut(duration: 0.32)) { index = (index + delta + videos.count) % videos.count }
             onVideoChange?()
+        }
+    }
+
+    /// Click up / down: move along the Home feed (+1 next, -1 previous), whoever the video is by. The panel then shows that
+    /// video, and swiping pages through its author's videos from there. The feed position is kept across swipes.
+    func feedStep(_ delta: Int, in feed: [VideoRef]) {
+        guard !feed.isEmpty else { return }
+        let from = feedPos ?? feed.firstIndex(of: current) ?? (delta > 0 ? -1 : feed.count)
+        var pos = (from + delta + feed.count) % feed.count
+        if feed.count > 1 && feed[pos] == current { pos = (pos + delta + feed.count) % feed.count }
+        feedPos = pos
+        direction = delta > 0 ? 1 : -1
+        let next = feed[pos]
+        Task {
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            withAnimation(.easeInOut(duration: 0.32)) { videos = [next]; index = 0 }
+            onVideoChange?()
+            await loadAuthorFeed()
         }
     }
 

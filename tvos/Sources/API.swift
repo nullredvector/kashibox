@@ -49,6 +49,14 @@ enum API {
         return Set(list)
     }
 
+    /// The Home feed order (what the phone's Home feed shows, or a random mix when no phone has published one).
+    static func feed() async -> [VideoRef]? {
+        struct Reply: Decodable { let videos: [VideoRef] }
+        guard let (data, _) = try? await URLSession.shared.data(from: Config.feedURL),
+              let reply = try? JSONDecoder().decode(Reply.self, from: data) else { return nil }
+        return reply.videos
+    }
+
     static func sessions() async -> [TVSession]? {
         struct Reply: Decodable { let sessions: [TVSession] }
         guard let (data, _) = try? await URLSession.shared.data(from: Config.sessionsURL),

@@ -164,6 +164,7 @@ const TV_MAX_TILES = 12;
 const tvClients = new Set();
 let tvGrid = [];
 let tvSessionId = null;   // the saved TV session the grid is being added to (null = none yet)
+let tvFeed = [];          // the phone's Home feed order (video paths), published by the phone for the TV's click-to-advance
 let tvSelectedId = null;  // the panel highlighted on the TV (the TV reports it while the highlight shows); a new video replaces it
 
 http.createServer((req, res) => {
@@ -588,6 +589,23 @@ http.createServer((req, res) => {
       else { try { tvSessionId = tvSessions.record(ARCHIVE_DIR, tvSessionId, tvGrid); } catch (_) {} }
       tvBroadcast();
       tvJson(200, { ok: true, count: tvGrid.length });
+    });
+    return;
+  }
+  // The Home feed order for the TV: published by a phone (its ranked list), else a random mix of the archive
+  if (pathname === '/api/tv/feed' && req.method === 'GET') {
+    const fromPhone = tvFeed.length >= 5;
+    const videos = fromPhone
+      ? tvFeed.map(v => ({ videoUrl: v, coverUrl: v.replace('/videos/', '/covers/').replace(/\.mp4$/, '.jpg') }))
+      : tvAuthor.shuffled(ARCHIVE_DIR, 200);
+    tvJson(200, { videos, source: fromPhone ? 'phone' : 'shuffle' });
+    return;
+  }
+  if (pathname === '/api/tv/feed' && req.method === 'POST') {
+    tvBody(100000, m => {
+      if (!Array.isArray(m.videos)) { tvJson(400, { error: 'Invalid request' }); return; }
+      tvFeed = m.videos.filter(v => typeof v === 'string' && tvAuthor.parseVideoPath(v)).slice(0, 300);
+      tvJson(200, { ok: true, count: tvFeed.length });
     });
     return;
   }
