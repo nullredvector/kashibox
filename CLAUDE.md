@@ -18,6 +18,7 @@ Run locally: `ARCHIVE_DIR=/path/to/archive PORT=9560 node server.js`, then open 
 | `db_stars.js` | storage for `stars.json` / `sessions.json` / `settings.json` (atomic writes, revisioned saves, a whitelist for settings) |
 | `tv_author.js` | for the TV app: one video's path -> the same author's downloaded videos (paths only), read from the archive database |
 | `tv_sessions.js` | TV sessions: the grid on the TV saved automatically (`tv_sessions.json`) so it can be brought back |
+| `tools/tv_refresh/` | Mac background job that rebuilds the TV app from master and reinstalls it on the Apple TV (a free Apple ID signs for 7 days): `install.sh` sets it up (launchd, checks every 6 h, acts when the last install is over 4 days old; `--uninstall` removes it), `refresh.sh` does the work; log in `~/Library/Logs/kashibox-tv-refresh.log` |
 | `assets/` | icons and logo (also served by the server) |
 | `tvos/` | the Apple TV app (SwiftUI): shows the grid of videos phones send to it; project generated with `xcodegen generate` from `project.yml` |
 | `Dockerfile`, `entrypoint.sh`, `docker-compose.yml`, `.github/workflows/` | image build and deployment |
