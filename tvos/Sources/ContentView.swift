@@ -69,7 +69,9 @@ struct ContentView: View {
         .onTapGesture(perform: handleSelect)
         .onPlayPauseCommand(perform: handlePlayPause)
         .onChange(of: store.panels.map(\.id)) { old, new in followPanels(old: old, new: new) }
-        .onChange(of: selectedID) { _, id in report(id) }
+        .onChange(of: selectedID) { _, _ in report() }
+        .onChange(of: showSelection) { _, _ in report() }
+        .onChange(of: anyAudible) { _, audible in AudioMode.set(audible: audible) }
     }
 
     // When the selected panel's video is replaced by a new one (the grid was full), the selection stays on that slot.
@@ -80,14 +82,19 @@ struct ContentView: View {
         touch()
     }
 
-    // The server needs to know the selection: once the grid is full it puts the next video sent from a phone there.
-    private func report(_ id: String?) {
+    // The server needs to know which panel is highlighted (the pink outline is showing): a video sent from a phone
+    // replaces that panel instead of being added.
+    private func report() {
+        let highlighted = showSelection ? selectedID : nil
         reportTask?.cancel()
         reportTask = Task {
             try? await Task.sleep(nanoseconds: 300_000_000)
-            if !Task.isCancelled { await API.select(panelID: id) }
+            if !Task.isCancelled { await API.select(panelID: highlighted) }
         }
     }
+
+    // True while some video on the grid is unmuted
+    private var anyAudible: Bool { store.panels.contains { $0.id == audibleID } }
 
     private var selectedPanel: PanelModel? {
         store.panels.first { $0.id == selectedID } ?? store.panels.last
@@ -154,7 +161,7 @@ struct ContentView: View {
         showSelection = true
         hideTask?.cancel()
         hideTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
             if !Task.isCancelled { showSelection = false }
         }
     }

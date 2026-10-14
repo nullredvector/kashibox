@@ -164,7 +164,7 @@ const TV_MAX_TILES = 12;
 const tvClients = new Set();
 let tvGrid = [];
 let tvSessionId = null;   // the saved TV session the grid is being added to (null = none yet)
-let tvSelectedId = null;  // the panel selected on the TV (the TV reports it); a new video replaces it once the grid is full
+let tvSelectedId = null;  // the panel highlighted on the TV (the TV reports it while the highlight shows); a new video replaces it
 
 http.createServer((req, res) => {
   const pathname = url.parse(req.url).pathname;
@@ -600,8 +600,8 @@ http.createServer((req, res) => {
           if (!ok(m.videoUrl) || (m.coverUrl && !ok(m.coverUrl))) throw new Error('bad url');
           tvGrid = tvGrid.filter(i => i.videoUrl !== m.videoUrl);
           const fresh = { id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '' };
-          const at = tvGrid.length >= TV_MAX_TILES ? tvGrid.findIndex(i => i.id === tvSelectedId) : -1;
-          if (at >= 0) { tvGrid[at] = fresh; tvSelectedId = fresh.id; }   // full: the selected panel gives way, in place
+          const at = tvGrid.findIndex(i => i.id === tvSelectedId);
+          if (at >= 0) { tvGrid[at] = fresh; tvSelectedId = fresh.id; }   // a highlighted panel gives way to the new video, in place
           else { tvGrid.push(fresh); while (tvGrid.length > TV_MAX_TILES) tvGrid.shift(); }
           try { tvSessionId = tvSessions.record(ARCHIVE_DIR, tvSessionId, tvGrid); } catch (_) { /* the grid still works if saving fails */ }
         } else throw new Error('bad action');
