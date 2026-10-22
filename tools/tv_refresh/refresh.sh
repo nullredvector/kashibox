@@ -44,6 +44,15 @@ else
   git clone --quiet --depth 1 --branch master "$REPO_URL" "$SRC" >>"$LOG" 2>&1 || fail "could not download the source from GitHub"
 fi
 
+# Xcode keeps reusing its cached signing profile for this app until that has expired, so a reinstall would carry the old
+# expiry date. Drop the cached copy (it is only a cache) so a fresh profile, valid for another 7 days, is requested.
+PROFILES="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+for f in "$PROFILES"/*.mobileprovision; do
+  [ -f "$f" ] || continue
+  name="$(security cms -D -i "$f" 2>/dev/null | plutil -extract Name raw - 2>/dev/null)"
+  [ "$name" = "tvOS Team Provisioning Profile: net.fexel.kashibox.tv" ] && rm -f "$f" && log "dropped the cached signing profile"
+done
+
 cd "$SRC/tvos" || fail "no tvos folder in the source"
 printf 'DEVELOPMENT_TEAM = %s\n' "$DEVELOPMENT_TEAM" > Local.xcconfig
 xcodegen generate >>"$LOG" 2>&1 || fail "xcodegen failed"
@@ -52,7 +61,12 @@ xcodebuild -project KashiboxTV.xcodeproj -scheme KashiboxTV -destination "id=$DE
   || fail "the build or signing failed (is Xcode still signed in to your Apple ID?)"
 
 APP="$DIR/build/Build/Products/Debug-appletvos/KashiboxTV.app"
+
+# Never install something that is about to expire again: the build's own profile must have most of its 7 days left
+EXP="$(security cms -D -i "$APP/embedded.mobileprovision" 2>/dev/null | plutil -extract ExpirationDate raw - 2>/dev/null)"
+EXP_EPOCH="$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$EXP" +%s 2>/dev/null)"
+[ -n "$EXP_EPOCH" ] && [ $(( EXP_EPOCH - $(date +%s) )) -gt $(( 5 * 86400 )) ] || fail "the new build's signing profile expires too soon ($EXP)"
 xcrun devicectl device install app --device "$DEVICE_ID" "$APP" >>"$LOG" 2>&1 || fail "installing on the Apple TV failed"
 
 touch "$DIR/last-success"
-log "refresh done: installed $(git -C "$SRC" rev-parse --short HEAD)"
+log "refresh done: installed $(git -C "$SRC" rev-parse --short HEAD), signing valid until $EXP"
