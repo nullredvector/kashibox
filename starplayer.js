@@ -6932,6 +6932,187 @@ render();
     autotagViewEl.appendChild(panel);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SEARCH — usernames and video ids / file names (the search box in the top nav)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Usernames match on the current and past usernames and on display names; a video matches on any part of its id, so a
+  // pasted file name ("7612880405837942030.mp4") or path works too. Hidden videos never show up.
+  function searchArchive(raw) {
+    const d = _dbCache;
+    const out = { users: [], videos: [] };
+    if (!d) return out;
+    let q = String(raw || '').trim().toLowerCase().replace(/^@+/, '');
+    if (!q) return out;
+    const counts = followCounts();
+    for (const [id, a] of Object.entries(d.authors)) {
+      const names = (a.uniqueIds || []).map(n => String(n).toLowerCase());
+      const nicks = (a.nicknames || []).map(n => String(n).toLowerCase());
+      let score = 99;
+      for (const n of names) score = Math.min(score, n === q ? 0 : n.startsWith(q) ? 1 : n.includes(q) ? 2 : 99);
+      for (const n of nicks) score = Math.min(score, n === q ? 3 : n.startsWith(q) ? 4 : n.includes(q) ? 5 : 99);
+      if (score === 99 || !names[0]) continue;
+      const n = counts.get(id) || 0;
+      out.users.push({ id, name: a.uniqueIds[0], nick: (a.nicknames && a.nicknames[0]) || '', videos: n, rank: score + (n ? 0 : 10) });
+    }
+    out.users.sort((x, y) => x.rank - y.rank || y.videos - x.videos);
+    out.users.length = Math.min(out.users.length, 8);
+    const idq = q.split(/[\\/]/).pop().replace(/\.(mp4|jpe?g)$/, '');
+    if (/^\d{3,}$/.test(idq)) {
+      const have = downloadedSet(), found = [];
+      for (const id in d.videos) {
+        if (isHidden(id)) continue;
+        const at = id.indexOf(idq);
+        if (at < 0) continue;
+        found.push({ id, rank: (id === idq ? 0 : at === 0 ? 1 : id.endsWith(idq) ? 2 : 3) + (have.has(id) ? 0 : 10), have: have.has(id) });
+        if (found.length > 400) break;
+      }
+      found.sort((x, y) => x.rank - y.rank);
+      out.videos = found.slice(0, 8).map(f => {
+        const v = d.videos[f.id], a = d.authors[v.authorId];
+        return { id: f.id, have: f.have, author: (a && a.uniqueIds && a.uniqueIds[0]) || '' };
+      });
+    }
+    return out;
+  }
+
+  // Play a searched video, with the rest of its creator's videos around it so the arrow keys keep going
+  function openSearchedVideo(id) {
+    const d = _dbCache, v = d && d.videos[id];
+    if (!v) return;
+    if (!downloadedSet().has(id)) { spToast('That video is not downloaded'); return; }
+    const list = authorVideos(v.authorId);
+    let idx = list.findIndex(x => x.id === id);
+    if (idx < 0) {   // not among the creator's listed videos: open it alone
+      const dir = videoDirFor(id), a = d.authors[v.authorId];
+      list.length = 0;
+      list.push({ id, authorName: (a && a.uniqueIds && a.uniqueIds[0]) || '', desc: d.videoDescriptions[id] || '', createTime: v.createTime || 0,
+        coverSrc: `data/${dir}/covers/${id}.jpg`, videoPath: `data/${dir}/videos/${id}.mp4` });
+      idx = 0;
+    }
+    openVideoOverlay(idx, list);
+  }
+
+  function buildNavSearch(nav) {
+    if (nav.querySelector('.sp-nav-search')) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'sp-nav-search';
+    wrap.innerHTML = '<svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Users or video ids';
+    input.title = 'Search usernames, video ids and file names (press / to jump here)';
+    input.autocomplete = 'off'; input.autocapitalize = 'off'; input.spellcheck = false;
+    input.setAttribute('aria-label', 'Search usernames, video ids and file names');
+    wrap.appendChild(input);
+    const log = nav.querySelector('.log-tab');
+    if (log) nav.insertBefore(wrap, log); else nav.appendChild(wrap);
+
+    const box = document.createElement('div');
+    box.className = 'sp-search-results';
+    box.style.display = 'none';
+    document.body.appendChild(box);
+
+    let rows = [], sel = 0, timer = null;
+    const close = () => { box.style.display = 'none'; rows = []; };
+    const place = () => {
+      const r = wrap.getBoundingClientRect();
+      box.style.top = Math.round(r.bottom + 6) + 'px';
+      box.style.right = Math.max(8, Math.round(window.innerWidth - r.right)) + 'px';
+    };
+    const choose = i => {
+      const row = rows[i];
+      if (!row) return;
+      close(); input.value = ''; input.blur();
+      row.go();
+    };
+    const mark = () => rows.forEach((r, i) => r.el.classList.toggle('sel', i === sel));
+    const note = text => { const n = document.createElement('div'); n.className = 'sp-search-note'; n.textContent = text; return n; };
+    const head = text => { const h = document.createElement('div'); h.className = 'sp-search-head'; h.textContent = text; return h; };
+
+    function render() {
+      const q = input.value.trim();
+      if (!q) { close(); return; }
+      box.textContent = '';
+      rows = []; sel = 0;
+      place();
+      box.style.display = 'block';
+      if (!_dbCache) {
+        box.appendChild(note(_dbFailed ? 'The archive could not be read.' : 'Loading the archive…'));
+        ensureArchiveDb();
+        archiveDbPromise().then(() => { if (input.value.trim() === q) render(); }).catch(() => {});
+        return;
+      }
+      const res = searchArchive(q);
+      if (res.users.length) {
+        box.appendChild(head('Users'));
+        res.users.forEach(u => {
+          const el = document.createElement('div');
+          el.className = 'sp-search-row';
+          el.innerHTML = '<span class="sp-sr-main"></span><span class="sp-sr-sub"></span><span class="sp-sr-count"></span>';
+          el.querySelector('.sp-sr-main').textContent = '@' + u.name;
+          el.querySelector('.sp-sr-sub').textContent = u.nick && u.nick !== u.name ? u.nick : '';
+          el.querySelector('.sp-sr-count').textContent = u.videos ? u.videos.toLocaleString() + (u.videos === 1 ? ' video' : ' videos') : 'no videos';
+          rows.push({ el, go: () => showAuthorTab(u.id, u.name) });
+          box.appendChild(el);
+        });
+      }
+      if (res.videos.length) {
+        box.appendChild(head('Videos'));
+        res.videos.forEach(v => {
+          const el = document.createElement('div');
+          el.className = 'sp-search-row' + (v.have ? '' : ' dim');
+          if (v.have) { const im = document.createElement('img'); im.loading = 'lazy'; im.src = coverSrcFor(v.id); im.alt = ''; el.appendChild(im); }
+          const main = document.createElement('span'); main.className = 'sp-sr-main sp-sr-id'; main.textContent = v.id;
+          const sub = document.createElement('span'); sub.className = 'sp-sr-sub'; sub.textContent = v.author ? '@' + v.author : '';
+          const cnt = document.createElement('span'); cnt.className = 'sp-sr-count'; cnt.textContent = v.have ? '' : 'not downloaded';
+          el.append(main, sub, cnt);
+          rows.push({ el, go: () => openSearchedVideo(v.id) });
+          box.appendChild(el);
+        });
+      }
+      if (!rows.length) box.appendChild(note('No users or videos match.'));
+      else box.appendChild(note('↑ ↓ to move · Enter to open · Esc to close'));
+      rows.forEach((r, i) => {
+        r.el.addEventListener('mousemove', () => { if (sel !== i) { sel = i; mark(); } });
+        r.el.addEventListener('mousedown', e => { e.preventDefault(); choose(i); });   // before the input loses focus
+      });
+      mark();
+    }
+
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(render, 60); });
+    input.addEventListener('focus', () => { if (input.value.trim()) render(); });
+    input.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!rows.length) return;
+        e.preventDefault();
+        sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+        mark();
+        rows[sel].el.scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        clearTimeout(timer);
+        if (!rows.length) render();
+        choose(sel);
+      } else if (e.key === 'Escape') {
+        if (input.value) input.value = ''; else input.blur();
+        close();
+      }
+    });
+    document.addEventListener('mousedown', e => { if (box.style.display !== 'none' && !wrap.contains(e.target) && !box.contains(e.target)) close(); });
+    window.addEventListener('resize', () => { if (box.style.display !== 'none') place(); });
+    // "/" jumps to the search box from anywhere that is not a text field
+    document.addEventListener('keydown', e => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || isMobilePlayer()) return;
+      const t = e.target, tag = t && t.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
+      if (!wrap.offsetParent) return;
+      e.preventDefault();
+      input.focus(); input.select();
+    });
+  }
+
   function makeNavTab(className, svgPath, label, onClick) {
     const tab = document.createElement('div');
     tab.className = className + ' pressable';
@@ -7027,6 +7208,9 @@ render();
       if (logTabActive) tab.classList.add('active');
       nav.appendChild(tab);
     }
+
+    // Search box — just left of the log tab
+    buildNavSearch(nav);
 
     // autotagTT review tab — just right of Following
     if (!nav.querySelector('.autotag-tab')) {
@@ -7387,7 +7571,27 @@ render();
         color: var(--active, #d7d7d7); background: rgba(255,255,255,.09);
         border-bottom: 3px solid var(--active, #d7d7d7); cursor: default;
       }
-      nav .log-tab { margin-left: auto !important; }
+      nav .log-tab { margin-left: 4px !important; }
+      /* search box: right-aligned, just left of the log tab */
+      nav .sp-nav-search { position: relative; display: flex; align-items: center; align-self: center; margin-left: auto; margin-right: 6px; }
+      nav .sp-nav-search svg { position: absolute; left: 9px; width: 14px; height: 14px; fill: #8a8a8a; pointer-events: none; }
+      nav .sp-nav-search input { width: 190px; height: 30px; box-sizing: border-box; padding: 0 10px 0 29px; border-radius: 15px;
+        border: 1px solid #3a3a3a; background: #1a1a1a; color: #e0e0e0; font: 13px/1 inherit; outline: none; transition: width .15s, border-color .15s; }
+      nav .sp-nav-search input::placeholder { color: #7a7a7a; }
+      nav .sp-nav-search input:focus { width: 280px; border-color: #5a8dcf; }
+      @media (max-width: 1100px) { nav .sp-nav-search input { width: 150px; } nav .sp-nav-search input:focus { width: 220px; } }
+      .sp-search-results { position: fixed; z-index: 9999; width: 380px; max-width: calc(100vw - 16px); max-height: min(70vh, 520px); overflow-y: auto;
+        background: #1f1f1f; border: 1px solid #444; border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.7); padding: 4px 0; font-size: 13px; color: #ddd; }
+      .sp-search-head { padding: 8px 12px 3px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #8a8a8a; }
+      .sp-search-note { padding: 8px 12px; color: #8a8a8a; font-size: 12px; }
+      .sp-search-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; }
+      .sp-search-row.sel { background: rgba(90,141,207,.22); }
+      .sp-search-row.dim { opacity: .55; }
+      .sp-search-row img { width: 28px; height: 50px; object-fit: cover; border-radius: 4px; background: #111; flex-shrink: 0; }
+      .sp-sr-main { font-weight: 600; color: #f0f0f0; white-space: nowrap; }
+      .sp-sr-id { font-family: ui-monospace, Menlo, monospace; font-weight: 500; font-size: 12px; }
+      .sp-sr-sub { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9a9a9a; }
+      .sp-sr-count { margin-left: auto; color: #8a8a8a; font-size: 12px; white-space: nowrap; }
       nav .stars-tab { order: -1; }
       /* the app keeps its own tab marked active underneath; hide that highlight while Stars is showing */
       nav:has(.stars-tab.active) .pressable.active:not(.stars-tab) {
