@@ -30,6 +30,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 
 ### Browse by creator
 - **Username tabs:** click a creator's name anywhere to open all of their videos in a tab of their own. Double-click a tab to open that account's profile page, if you have set a profile link in Settings (an address with `{username}` in it). With a profile link set, desktop tabs also check whether the account still exists and show its name in red when it doesn't (including accounts whose profile page says it couldn't find them). Your server makes that check (never the browser) and caches the answer for 12 hours.
+- **Search:** the box in the top bar (press `/` to jump to it) finds creators by username or display name and videos by id or file name; Enter opens the first result.
 - **Tab sessions:** open tabs are saved automatically as sessions you can restore, rename or delete later.
 - **Player window:** a pop-out player that doesn't disturb the tab you are on, with the same star, tag and number tools.
 
