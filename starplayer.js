@@ -681,7 +681,7 @@
         authorName = authorName || info.authorName;
         desc       = desc       || info.desc;
       }
-      stars[videoId] = { id: videoId, coverSrc, authorName: authorName || '', desc: desc || '' };
+      stars[videoId] = { id: videoId, coverSrc, authorName: authorName || '', desc: desc || '', added: Date.now() };
     }
     saveStars();
     afterStarChange();
@@ -999,7 +999,7 @@
   }
 
   // ── Sort order for the stars, username and review grids ──────────────────
-  // Latest/Oldest use the video's post date, Popular its like count. The review page also offers
+  // Latest/Oldest use the video's post date, Popular its like count; the Stars grid also offers Newest (when it was starred). The review page also offers
   // "Best match", which keeps the order the model ranked its suggestions in.
   // The Stars grid in AI mode has its own remembered sort (default: best match)
   function sortPage(page) { return page === 'stars' && labelMode === 'ai' ? 'stars-ai' : page; }
@@ -1007,6 +1007,7 @@
   function sortOptions(page) {
     page = sortPage(page);
     const opts = [['latest', 'Latest'], ['popular', 'Popular'], ['oldest', 'Oldest']];
+    if (page === 'stars') return [['newest', 'Newest'], ...opts];   // Newest = the most recently starred first
     if (page === 'likes' || page === 'favs') return [['recent', 'Added'], ...opts];
     return page === 'autotag' || page === 'stars-ai' ? [['score', 'Best match'], ...opts] : opts;
   }
@@ -1030,6 +1031,14 @@
   function sortVideos(items, page) {
     const mode = getSort(page);
     const d = _dbCache;
+    if (mode === 'newest') {
+      // Most recently starred first. A star remembers when it was added; older stars have no date, so they follow in the
+      // order they were saved (later = newer), and videos that are not stars at all come last.
+      const pos = new Map(); let n = 0;
+      for (const id in stars) pos.set(id, n++);
+      const rank = it => { const st = stars[it.id]; return !st ? -1 : typeof st.added === 'number' ? 1e13 + st.added : pos.get(String(it.id)); };
+      return items.map((item, i) => ({ item, i, r: rank(item) })).sort((a, b) => (b.r - a.r) || (a.i - b.i)).map(k => k.item);
+    }
     if (mode === 'score' || mode === 'recent' || !d) return items;
     const keyed = items.map((item, i) => {
       const v = d.videos[item.id];
@@ -4924,7 +4933,7 @@ function render(){
   const OSVG='<svg viewBox="0 0 24 24" width="24" height="24"><defs><linearGradient id="og" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff5f6d"/><stop offset=".28" stop-color="#ffc371"/><stop offset=".52" stop-color="#7bed9f"/><stop offset=".76" stop-color="#4fc3f7"/><stop offset="1" stop-color="#b388ff"/></linearGradient></defs><path fill="url(#og)" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/><path fill="#fff6b8" d="M20 .6l.8 2L22.8 3.4l-2 .8L20 6.2l-.8-2-2-.8 2-.8z"/><path fill="#c8f7ff" d="M4.3 14.8l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z"/></svg>';
   const INH=new Set(${initInh});
   const paintStar=()=>{const st=ls()[item.id]; const org=Boolean(st&&st.super); const inh=!org&&INH.has(item.id); sb.className='b'+(st?' on':'')+((org||inh)?' sup':''); if(org)sb.innerHTML=OSVG; else if(inh)sb.innerHTML=SSVG; else sb.textContent='★'; sb.title=org?'Super star (hold to make it a normal star)':inh?'Super star account (hold to make this video a super star too)':'Star (hold for a super star)';};
-  const addStar=s=>{s[item.id]={id:item.id,coverSrc:item.coverSrc,authorName:item.authorName||'',desc:item.desc||''};};
+  const addStar=s=>{s[item.id]={id:item.id,coverSrc:item.coverSrc,authorName:item.authorName||'',desc:item.desc||'',added:Date.now()};};
   paintStar();
   let starHold=null, starHeld=false;
   sb.addEventListener('pointerdown',()=>{starHeld=false;clearTimeout(starHold);starHold=setTimeout(()=>{

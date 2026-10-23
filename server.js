@@ -536,7 +536,7 @@ http.createServer((req, res) => {
       const p = tvAuthor.parseVideoPath(m.videoUrl);
       if (!p || typeof m.starred !== 'boolean') { tvJson(400, { error: 'Invalid request' }); return; }
       const cur = dbStars.loadWithRev();
-      if (m.starred && !cur.stars[p.id]) cur.stars[p.id] = { id: p.id, coverSrc: p.coverSrc, authorName: '', desc: '' };
+      if (m.starred && !cur.stars[p.id]) cur.stars[p.id] = { id: p.id, coverSrc: p.coverSrc, authorName: '', desc: '', added: Date.now() };
       if (!m.starred) delete cur.stars[p.id];
       let r;
       try { r = dbStars.saveGuarded({ stars: cur.stars, groups: cur.groups, levels: cur.levels }, cur.rev); }
