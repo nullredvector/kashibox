@@ -8,6 +8,7 @@ const crypto   = require('crypto');
 const dbStars  = require('./db_stars');
 const tvAuthor = require('./tv_author');
 const tvSessions = require('./tv_sessions');
+const scoutStore = require('./scout_store');
 
 const ARCHIVE_DIR = process.env.ARCHIVE_DIR || '/archive';
 const PORT        = parseInt(process.env.PORT || '8080', 10);
@@ -327,6 +328,35 @@ http.createServer((req, res) => {
           if (status !== 200 || typeof body.syncIntervalMinutes !== 'number') return sendJson(502, { ok: false, error: 'ttpull did not accept the change' });
           sendJson(200, { ok: true, settings: pick(body) });
         }).catch(e => unreachable(e, 502));
+    });
+    return;
+  }
+
+  // ── For You picks (the suggestion queue) ───────────────────────────────────
+  // GET  /api/scout                       → { available, candidates, decisions, status }  (what the scout collected, what you decided)
+  // POST /api/scout/feedback { id, decision } → decision: liked | skipped | opened | pending (forget). Nothing is ever liked for you.
+  // The scout and the scorer are other programs; they talk to kashibox only through files (see docs/scout/README.md).
+  if (pathname === '/api/scout' && req.method === 'GET') {
+    sendBody(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, JSON.stringify(scoutStore.loadScout()));
+    return;
+  }
+  if (pathname === '/api/scout/feedback') {
+    const sendJson = (code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
+    if (req.method !== 'POST') { res.writeHead(405); res.end('Method not allowed'); return; }
+    const origin = req.headers['origin'];
+    let sameOrigin = true;
+    if (origin) { try { sameOrigin = new URL(origin).host === req.headers['host']; } catch (_) { sameOrigin = false; } }
+    if (!sameOrigin) return sendJson(403, { error: 'cross-origin request refused' });
+    if (!/^application\/json/i.test(req.headers['content-type'] || '')) return sendJson(415, { error: 'JSON required' });
+    let size = 0, chunks = [], tooBig = false;
+    req.on('data', c => { size += c.length; if (size > 4096) tooBig = true; else chunks.push(c); });
+    req.on('end', () => {
+      if (tooBig) return sendJson(413, { error: 'body too large' });
+      let d;
+      try { d = JSON.parse(Buffer.concat(chunks).toString()); } catch (_) { return sendJson(400, { error: 'Invalid JSON' }); }
+      if (!d || typeof d !== 'object' || Array.isArray(d)) return sendJson(400, { error: 'Invalid JSON' });
+      try { const r = scoutStore.recordDecision(d.id, d.decision); const { code, ...rest } = r; sendJson(code, rest); }
+      catch (_) { sendJson(500, { error: 'could not save' }); }
     });
     return;
   }

@@ -8,6 +8,7 @@ COPY server.js     ./server.js
 COPY db_stars.js   ./db_stars.js
 COPY tv_author.js  ./tv_author.js
 COPY tv_sessions.js ./tv_sessions.js
+COPY scout_store.js ./scout_store.js
 COPY entrypoint.sh ./entrypoint.sh
 COPY assets        ./assets
 COPY shell.html    ./shell.html

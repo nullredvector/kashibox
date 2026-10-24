@@ -44,6 +44,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 ### Smarter feed
 - **Watch log:** the phone feed notes how long each video is watched and whether you skip it quickly. It is stored only in your archive folder.
 - **Ranker:** orders the Home feed from stars, numbers, group membership and size, like counts and the watch log, and gives videos you have just seen a cooldown. It only ever sees ids and numbers, never what a tag is called.
+- **For You picks:** the Review tab can also show videos a scout on your server suggests from the For You feed, judged by the tags you taught the AI tagger. You open a pick and like it yourself, or skip it; nothing is ever liked for you, and the scout is off until you turn it on in Settings. How it works: [docs/scout](docs/scout/README.md).
 - **Review page:** suggestions from the optional **autotagTT** companion (local machine-learning tag suggestions) show up in a Review tab where you accept or reject them.
 
 ### Ops

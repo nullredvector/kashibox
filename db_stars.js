@@ -89,6 +89,7 @@ function save(data) {
 // ── Settings (settings.json): small, whitelisted, shared by every device ──
 //   profileUrl  address opened when a username tab is double-clicked; {username} stands for the username ('' = off)
 //   debugBanner true = show the status banner at startup (Capacitor / Cast diagnostics)
+//   scoutEnabled / scoutDaily / scoutMin / scoutFrom / scoutTo  the For You scout's limits (it reads them from settings.json)
 function cleanSettings(input) {
   const s = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const out = {};
@@ -103,6 +104,13 @@ function cleanSettings(input) {
     out.numericMin = s.numericMin; out.numericMax = s.numericMax;
   }
   if (typeof s.numericName === 'string') out.numericName = s.numericName.trim().slice(0, 30);
+  // The For You scout (another program) reads these from settings.json: off unless scoutEnabled is true
+  if (typeof s.scoutEnabled === 'boolean') out.scoutEnabled = s.scoutEnabled;
+  if (Number.isInteger(s.scoutDaily) && s.scoutDaily >= 0 && s.scoutDaily <= 1000) out.scoutDaily = s.scoutDaily;     // videos it may look at per day
+  if (Number.isInteger(s.scoutMin) && s.scoutMin >= 0 && s.scoutMin <= 100) out.scoutMin = s.scoutMin;              // lowest score (percent) worth suggesting
+  if (Number.isInteger(s.scoutFrom) && Number.isInteger(s.scoutTo) && s.scoutFrom >= 0 && s.scoutFrom <= 23 && s.scoutTo >= 0 && s.scoutTo <= 23) {
+    out.scoutFrom = s.scoutFrom; out.scoutTo = s.scoutTo;                                                            // only between these hours (local time)
+  }
   return out;
 }
 
