@@ -472,6 +472,7 @@
           _dbCache = d;
           if (starsTabActive) renderStarsView();
           if (autotagTabActive) renderAutotagView();
+          if (scoutTabActive) renderScoutView();
           return d;
         })
         .catch(e => { _dbFailed = true; console.warn('[starplayer] archive db load failed', e); throw e; })
@@ -1335,7 +1336,7 @@
     if (settingsTabActive) hideSettingsView();
     // Already showing this page (e.g. coming back from a video): leave the scroll position alone
     if (listTabKind === kind && listViewEl && listViewEl.style.display !== 'none') { syncNavActive(); return; }
-    if (autotagTabActive) hideAutotagView();
+    if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
     if (logTabActive) hideLogView();
     if (activeAuthorId) hideAuthorView(false);
     if (starsTabActive) {
@@ -1383,8 +1384,8 @@
     const sel = activeAuthorId ? null
       : settingsTabActive ? '.settings-tab'
       : listTabKind ? ({ likes: '.likes', bookmarked: '.bookmarked', following: '.following' })[listTabKind]
-      : starsTabActive ? '.stars-tab' : logTabActive ? '.log-tab' : autotagTabActive ? '.autotag-tab' : null;
-    ['.likes', '.bookmarked', '.following', '.stars-tab', '.log-tab', '.autotag-tab', '.settings-tab'].forEach(x => {
+      : starsTabActive ? '.stars-tab' : logTabActive ? '.log-tab' : autotagTabActive ? '.autotag-tab' : scoutTabActive ? '.scout-tab' : null;
+    ['.likes', '.bookmarked', '.following', '.stars-tab', '.log-tab', '.autotag-tab', '.scout-tab', '.settings-tab'].forEach(x => {
       nav.querySelector(x)?.classList.toggle('active', x === sel);
     });
   }
@@ -1610,7 +1611,7 @@
     if (settingsTabActive && settingsViewEl && settingsViewEl.style.display !== 'none') return;
     if (!mobile) {
       if (listTabKind) hideListView();
-      if (autotagTabActive) hideAutotagView();
+      if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
       if (logTabActive) hideLogView();
       if (activeAuthorId) hideAuthorView(false);
       if (starsTabActive) {
@@ -1955,7 +1956,7 @@
     }
 
     // ── For You scout ──
-    const sc = section('For You scout', 'A program on your server can look through the For You feed and suggest videos for you to open and like yourself, judged by the tags you taught the AI tagger. It never likes, follows or posts anything, and it stops and tells you if the site asks it to verify. Picks appear in Review, under For You picks. It is off until you turn it on.');
+    const sc = section('For You scout', 'A program on your server can look through the For You feed and suggest videos for you to open and like yourself, judged by the tags you taught the AI tagger. It never likes, follows or posts anything, and it stops and tells you if the site asks it to verify. Picks appear in the For You tab. It is off until you turn it on.');
     const scStatus = document.createElement('div');
     scStatus.className = 'set-status';
     const scOn = document.createElement('label');
@@ -2081,7 +2082,7 @@
   function showStarsTab() {
     if (settingsTabActive) hideSettingsView();
     if (listTabKind) hideListView();
-    if (autotagTabActive) hideAutotagView();
+    if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
     if (logTabActive) hideLogView();
     if (activeAuthorId) hideAuthorView();
     starsTabActive = true;
@@ -2090,7 +2091,7 @@
 
     if (isMobilePlayer()) { activeMobileTab = 'stars'; updateMobileNavActive(); }
     else {
-      document.querySelectorAll('nav .author-tab.active, nav .log-tab.active, nav .autotag-tab.active').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('nav .author-tab.active, nav .log-tab.active, nav .autotag-tab.active, nav .scout-tab.active').forEach(el => el.classList.remove('active'));
       document.querySelector('nav .stars-tab')?.classList.add('active');
     }
 
@@ -2107,7 +2108,7 @@
   function showMainContent() {
     if (settingsTabActive) hideSettingsView();
     if (listTabKind) hideListView();
-    if (autotagTabActive) hideAutotagView();
+    if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
     if (logTabActive) hideLogView();
     if (activeAuthorId) hideAuthorView();
     starsTabActive = false;
@@ -2994,6 +2995,7 @@
     }
     if (activeAuthorId) hideAuthorView(false);
     if (autotagTabActive && tab !== 'review') hideAutotagView();
+    if (scoutTabActive && tab !== 'scout') hideScoutView();
     if (tab !== 'stars') releaseGridPreviews(starsViewEl);
     activeMobileTab = tab;
     updateMobileNavActive();
@@ -3012,6 +3014,10 @@
     } else if (tab === 'recents') {
       if (playerOpen) closePlayer();
       showRecentsView();
+    } else if (tab === 'scout') {
+      if (playerOpen) closePlayer();
+      hideRecentsView();
+      showScoutTab();
     } else if (tab === 'review') {
       if (playerOpen) closePlayer();
       hideRecentsView();
@@ -3113,6 +3119,7 @@
       { id: 'stars',   label: 'Stars',   svg: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' },
       { id: 'recents', label: 'Recents', svg: '<path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L11 13.5V7h1.5v5.87l4.75 2.82-1.01 1.74z"/>' },
       { id: 'favs',    label: 'Library',    svg: '<path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>' },
+      { id: 'scout',   label: 'For You', svg: '<path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/>' },
       { id: 'review',  label: 'Review',  svg: '<path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/>' },
     ];
     tabs.forEach(({ id, label, svg }) => {
@@ -3181,6 +3188,7 @@
     if (activeMobileTab === 'stars')   return document.getElementById('stars-view');
     if (activeMobileTab === 'recents') return recentsGridEl;
     if (activeMobileTab === 'review')  return autotagViewEl;
+    if (activeMobileTab === 'scout')   return scoutViewEl;
     if (activeMobileTab === 'favs') return listViewEl;
     return document.querySelector('main');
   }
@@ -5131,6 +5139,7 @@ render();
   function currentViewDescriptor() {
     if (activeAuthorId) return { kind: 'author', id: activeAuthorId };
     if (autotagTabActive) return { kind: 'autotag' };
+    if (scoutTabActive) return { kind: 'scout' };
     if (logTabActive) return { kind: 'log' };
     if (settingsTabActive) return { kind: 'settings' };
     if (listTabKind) return { kind: 'list', list: listTabKind };
@@ -5160,6 +5169,7 @@ render();
       case 'list':    showListTab(d.list); return;
       case 'settings': showSettingsTab(); return;
       case 'autotag': showAutotagTab(); return;
+      case 'scout':   showScoutTab();   return;
       case 'log':     showLogTab();     return;
     }
     showStarsTab();
@@ -5170,7 +5180,7 @@ render();
       const from = currentViewDescriptor();
       if (!(from.kind === 'author' && from.id === id)) authorReturn.set(id, from);
     }
-    if (autotagTabActive) hideAutotagView();
+    if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
     if (logTabActive) hideLogView();
     if (!openAuthors.some(a => a.id === id)) openAuthors.push({ id, name });
     activeAuthorId = id;
@@ -5793,7 +5803,7 @@ render();
     if (isMobilePlayer() || logTabActive) return;
     if (settingsTabActive) hideSettingsView();
     if (listTabKind) hideListView();
-    if (autotagTabActive) hideAutotagView();
+    if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
     if (activeAuthorId) hideAuthorView();
     if (starsTabActive) {
       starsTabActive = false;
@@ -5829,7 +5839,6 @@ render();
 
   let autotagTabActive = false;
   let autotagViewEl    = null;
-  let atSource         = 'tags';       // 'tags' (the tag review) | 'scout' (For You picks)
   let atTag            = 'braces';
   let atMode           = 'pending';   // 'pending' | 'accepted' | 'rejected'
   let atViewMode       = (() => { try { return localStorage.getItem('sp_at_view') === 'grid' ? 'grid' : 'cards'; } catch (_) { return 'cards'; } })();   // phones: swipe cards or the grid
@@ -6253,7 +6262,6 @@ render();
     if (!autotagViewEl) return;
     releaseGridPreviews(autotagViewEl);
     if (atSwipeCleanup) { atSwipeCleanup(); atSwipeCleanup = null; }
-    if (atSource === 'scout') { renderScoutView(); return; }
     const openPanels = ['at-picker', 'at-run-panel'].map(id => document.getElementById(id)).filter(Boolean);   // survive a re-render
     autotagViewEl.innerHTML = '';
 
@@ -6295,10 +6303,6 @@ render();
     const pick = document.createElement('button');
     pick.className = 'at-mode'; pick.textContent = 'Tags…'; pick.title = 'Choose which of your groups the AI tagger learns';
     pick.addEventListener('click', openTagPicker);
-    const forBtn = document.createElement('button');
-    forBtn.id = 'at-scout-btn'; forBtn.className = 'at-mode'; forBtn.title = 'Videos suggested from the For You feed, for you to open and like yourself';
-    forBtn.textContent = scoutButtonLabel();
-    forBtn.addEventListener('click', () => { atSource = 'scout'; scoutBucket = 'pending'; scoutShown = 60; scoutLoad(); scoutPoll(); renderAutotagView(); });
     const runBtn = document.createElement('button');
     runBtn.className = 'at-mode'; runBtn.textContent = 'Run…'; runBtn.title = 'Train the AI tagger now, or set it to run nightly';
     runBtn.addEventListener('click', openRunPanel);
@@ -6306,7 +6310,7 @@ render();
     chip.id = 'at-run-chip'; chip.className = 'at-note';
     const row1 = document.createElement('div'); row1.className = 'at-row';
     const row2 = document.createElement('div'); row2.className = 'at-row';
-    row1.append(title, sel, modes, pick, forBtn, runBtn);
+    row1.append(title, sel, modes, pick, runBtn);
     head.append(row1, row2);
     atUpdateChip();
 
@@ -6363,6 +6367,7 @@ render();
   // decided. Nothing here likes anything. See docs/scout/README.md.
   // ═══════════════════════════════════════════════════════════════════════════
   let scoutData = null, scoutError = '', scoutBucket = 'pending', scoutShown = 60, scoutTimer = null, scoutSig = '';
+  let scoutTabActive = false, scoutViewEl = null;
 
   function scoutStatusText(st) {
     const ago = st.updated ? Math.max(0, Math.round((Date.now() - st.updated) / 60000)) : null;
@@ -6404,9 +6409,16 @@ render();
     return out;
   }
 
-  function scoutButtonLabel() {
-    const n = scoutData ? scoutBuckets().pending.length : 0;
-    return 'For You picks' + (n ? ' ' + n.toLocaleString() : '');
+  // The number of picks waiting, on the tab (desktop bar and phone bar)
+  function scoutBadge() {
+    let n = 0;
+    try { n = scoutData ? scoutBuckets().pending.length : 0; } catch (_) { /* called before the data exists */ }
+    document.querySelectorAll('nav .scout-tab, #sp-mobile-nav .sp-nav-btn[data-tab="scout"]').forEach(t => {
+      let b = t.querySelector('.sp-badge');
+      if (!n) { if (b) b.remove(); return; }
+      if (!b) { b = document.createElement('span'); b.className = 'sp-badge'; t.appendChild(b); }
+      b.textContent = n > 99 ? '99+' : String(n);
+    });
   }
 
   // The page of the video on the site: the profile link from Settings + /video/<id> (needs a link that ends in {username})
@@ -6427,15 +6439,17 @@ render();
       scoutSig = sig; scoutData = d;
       if (same) return;   // nothing new: leave the screen (and its scroll position) alone
     } catch (e) { scoutError = 'Could not read the picks (' + (e.message || e) + ').'; }
-    if (!autotagTabActive) return;
-    if (atSource === 'scout') renderScoutView();
-    else { const b = document.getElementById('at-scout-btn'); if (b) b.textContent = scoutButtonLabel(); }
+    scoutBadge();
+    if (scoutTabActive) renderScoutView();
   }
+
+  // keep the number on the tab fresh even while the tab is closed
+  setTimeout(() => { scoutLoad(); setInterval(() => { if (!document.hidden && !scoutTabActive) scoutLoad(); }, 5 * 60000); }, 2000);
 
   function scoutPoll() {
     clearInterval(scoutTimer);
     scoutTimer = setInterval(() => {
-      if (!autotagTabActive || atSource !== 'scout') { clearInterval(scoutTimer); scoutTimer = null; return; }
+      if (!scoutTabActive) { clearInterval(scoutTimer); scoutTimer = null; return; }
       scoutLoad();
     }, 60000);
   }
@@ -6498,12 +6512,12 @@ render();
   }
 
   function renderScoutView() {
-    if (!autotagViewEl) return;
-    const prev = autotagViewEl.querySelector('#scout-grid');
+    if (!scoutViewEl) return;
+    const prev = scoutViewEl.querySelector('#scout-grid');
     const keepScroll = prev ? prev.scrollTop : 0;
-    autotagViewEl.innerHTML = '';
+    scoutViewEl.innerHTML = '';
     const head = document.createElement('div');
-    head.id = 'autotag-head';
+    head.id = 'scout-head';
     const row1 = document.createElement('div'); row1.className = 'at-row';
     const title = document.createElement('span'); title.className = 'stars-main-title'; title.textContent = 'For You picks';
     const modes = document.createElement('div'); modes.className = 'at-modes';
@@ -6516,17 +6530,14 @@ render();
       el.addEventListener('click', () => { scoutBucket = m; scoutShown = 60; renderScoutView(); });
       modes.appendChild(el);
     });
-    const back = document.createElement('button');
-    back.className = 'at-mode'; back.textContent = 'Tag review'; back.title = 'Back to accepting and rejecting tag suggestions';
-    back.addEventListener('click', () => { atSource = 'tags'; clearInterval(scoutTimer); scoutTimer = null; renderAutotagView(); atLoad(); });
     const refresh = document.createElement('button');
     refresh.className = 'at-mode'; refresh.textContent = 'Refresh'; refresh.addEventListener('click', () => { scoutSig = ''; scoutLoad(); });
-    row1.append(title, modes, back, refresh);
+    row1.append(title, modes, refresh);
     head.appendChild(row1);
 
     const grid = document.createElement('div');
     grid.id = 'scout-grid';
-    const msg = text => { const d = document.createElement('div'); d.id = 'autotag-msg'; d.textContent = text; grid.appendChild(d); };
+    const msg = text => { const d = document.createElement('div'); d.className = 'scout-msg'; d.textContent = text; grid.appendChild(d); };
     const st = scoutData && scoutData.status;
     let banner = null;
     if (st && ['challenge', 'login', 'error'].includes(st.state)) {
@@ -6549,8 +6560,49 @@ render();
         grid.appendChild(more);
       }
     }
-    autotagViewEl.append(head, ...(banner ? [banner] : []), grid);
+    scoutViewEl.append(head, ...(banner ? [banner] : []), grid);
     grid.scrollTop = keepScroll;
+  }
+
+  function showScoutTab() {
+    if (scoutTabActive) return;
+    if (settingsTabActive && !isMobilePlayer()) hideSettingsView();
+    if (listTabKind && !isMobilePlayer()) hideListView();
+    if (activeAuthorId) hideAuthorView();
+    if (logTabActive) hideLogView();
+    if (autotagTabActive) hideAutotagView();
+    if (starsTabActive) {
+      starsTabActive = false;
+      if (starsViewEl) { releaseGridPreviews(starsViewEl); starsViewEl.style.display = 'none'; }
+      document.querySelector('nav .stars-tab')?.classList.remove('active');
+    }
+    closeVideoOverlay();
+    scoutTabActive = true;
+    document.querySelector('main')?.style.setProperty('display', 'none');
+    document.body.classList.add('sp-scout-open');
+    if (isMobilePlayer()) { activeMobileTab = 'scout'; updateMobileNavActive(); }
+    else document.querySelector('nav .scout-tab')?.classList.add('active');
+    if (!scoutViewEl) {
+      scoutViewEl = document.createElement('div');
+      scoutViewEl.id = 'scout-view';
+      const main = document.querySelector('main');
+      if (main) main.parentNode.insertBefore(scoutViewEl, main); else document.body.appendChild(scoutViewEl);
+    }
+    scoutViewEl.style.display = 'flex';
+    ensureArchiveDb();
+    renderScoutView();
+    scoutLoad();
+    scoutPoll();
+    if (!_dbCache) archiveDbPromise().catch(() => {}).then(() => { if (scoutTabActive) renderScoutView(); });
+  }
+
+  function hideScoutView() {
+    if (!scoutTabActive) return;
+    scoutTabActive = false;
+    clearInterval(scoutTimer); scoutTimer = null;
+    if (scoutViewEl) scoutViewEl.style.display = 'none';
+    document.body.classList.remove('sp-scout-open');
+    document.querySelector('nav .scout-tab')?.classList.remove('active');
   }
 
   function showAutotagTab() {
@@ -6559,6 +6611,7 @@ render();
     if (listTabKind && !isMobilePlayer()) hideListView();
     if (activeAuthorId) hideAuthorView();
     if (logTabActive) hideLogView();
+    if (scoutTabActive) hideScoutView();
     if (starsTabActive) {
       starsTabActive = false;
       if (starsViewEl) { releaseGridPreviews(starsViewEl); starsViewEl.style.display = 'none'; }
@@ -6579,17 +6632,14 @@ render();
     autotagViewEl.style.display = 'flex';
     atStartPolling();
     ensureArchiveDb();
-    scoutLoad();
-    if (atSource === 'scout') scoutPoll();
     if (_dbCache) { renderAutotagView(); atLoad(); }
-    else { renderAutotagView(); archiveDbPromise().catch(() => {}).then(() => { if (autotagTabActive) { atLoad(); if (atSource === 'scout') renderScoutView(); } }); }
+    else { renderAutotagView(); archiveDbPromise().catch(() => {}).then(() => { if (autotagTabActive) atLoad(); }); }
   }
 
   function hideAutotagView() {
     if (!autotagTabActive) return;
     if (atSwipeCleanup) { atSwipeCleanup(); atSwipeCleanup = null; }
     autotagTabActive = false;
-    clearInterval(scoutTimer); scoutTimer = null;
     releaseGridPreviews(autotagViewEl);
     if (autotagViewEl) autotagViewEl.style.display = 'none';
     document.body.classList.remove('sp-autotag-open');
@@ -7501,6 +7551,19 @@ render();
       if (fol) fol.insertAdjacentElement('afterend', tab); else nav.appendChild(tab);
     }
 
+    // For You picks tab: just left of Review
+    if (!nav.querySelector('.scout-tab')) {
+      const tab = makeNavTab('scout-tab',
+        '<path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/>',
+        'For You picks',
+        () => showScoutTab()
+      );
+      if (scoutTabActive) tab.classList.add('active');
+      const rev = nav.querySelector('.autotag-tab');
+      if (rev) rev.insertAdjacentElement('beforebegin', tab); else nav.appendChild(tab);
+      scoutBadge();
+    }
+
     syncAuthorTabs();
     atUpdateStrips();
   }
@@ -7541,7 +7604,7 @@ render();
     }
     defaultViewShown = true;
     if (isMobilePlayer()) { setMobileTab('home'); return; }
-    if (!starsTabActive && !logTabActive && !autotagTabActive && !activeAuthorId) showStarsTab();
+    if (!starsTabActive && !logTabActive && !autotagTabActive && !scoutTabActive && !activeAuthorId) showStarsTab();
   }
 
   // ── Expose live API for pop-out windows ──────────────────────────────────
@@ -7805,7 +7868,7 @@ render();
 
 
       /* ── Stars & Player nav tabs ── */
-      nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab {
+      nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab, nav .scout-tab {
         display: flex; align-items: center;
         cursor: pointer; border-bottom: 3px solid transparent; color: inherit;
         white-space: nowrap;
@@ -7813,20 +7876,20 @@ render();
 
       /* ── Icon-only top nav (labels hidden; title tooltips added in JS) ── */
       nav { margin-left: 20px !important; }
-      nav .likes, nav .bookmarked, nav .following, nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab {
+      nav .likes, nav .bookmarked, nav .following, nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab, nav .scout-tab {
         font-size: 0 !important; gap: 0 !important;
         margin: 3.3px 2px 0 !important; padding: 0 14px !important;
         justify-content: center; border-radius: 6px 6px 0 0;
         transition: color .15s, background .15s;
       }
-      nav .likes svg, nav .bookmarked svg, nav .following svg, nav .stars-tab svg, nav .player-tab svg, nav .session-tab svg, nav .settings-tab svg, nav .log-tab svg, nav .autotag-tab svg {
+      nav .likes svg, nav .bookmarked svg, nav .following svg, nav .stars-tab svg, nav .player-tab svg, nav .session-tab svg, nav .settings-tab svg, nav .log-tab svg, nav .autotag-tab svg, nav .scout-tab svg {
         width: 20px !important; height: 20px !important; margin: 0 !important;
       }
       nav .likes:not(.active):hover, nav .bookmarked:not(.active):hover,
-      nav .following:not(.active):hover, nav .stars-tab:not(.active):hover, nav .player-tab:not(.active):hover, nav .session-tab:not(.menu-open):hover, nav .settings-tab:not(.active):hover, nav .log-tab:not(.active):hover, nav .autotag-tab:not(.active):hover {
+      nav .following:not(.active):hover, nav .stars-tab:not(.active):hover, nav .player-tab:not(.active):hover, nav .session-tab:not(.menu-open):hover, nav .settings-tab:not(.active):hover, nav .log-tab:not(.active):hover, nav .autotag-tab:not(.active):hover, nav .scout-tab:not(.active):hover {
         color: var(--active, #d7d7d7); background: rgba(255,255,255,.05);
       }
-      nav .likes.active, nav .bookmarked.active, nav .following.active, nav .stars-tab.active, nav .player-tab.active, nav .session-tab.menu-open, nav .settings-tab.active, nav .log-tab.active, nav .autotag-tab.active {
+      nav .likes.active, nav .bookmarked.active, nav .following.active, nav .stars-tab.active, nav .player-tab.active, nav .session-tab.menu-open, nav .settings-tab.active, nav .log-tab.active, nav .autotag-tab.active, nav .scout-tab.active {
         color: var(--active, #d7d7d7); background: rgba(255,255,255,.09);
         border-bottom: 3px solid var(--active, #d7d7d7); cursor: default;
       }
@@ -7877,6 +7940,7 @@ render();
       }
       body.sp-log-open nav .pressable.active:not(.log-tab),
       body.sp-autotag-open nav .pressable.active:not(.autotag-tab),
+      body.sp-scout-open nav .pressable.active:not(.scout-tab),
       body.sp-author-open nav .pressable.active:not(.author-tab) {
         color: var(--inactive, rgb(160,160,160)) !important;
         background: none !important; border-bottom-color: transparent !important;
@@ -7900,9 +7964,9 @@ render();
         header:has(> nav) nav .session-tab  { right: calc(var(--left-padding, 20px) + 112px); }
       }
 
-      #autotag-view { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; position: relative; }
+      #autotag-view, #scout-view { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; position: relative; }
       /* two fixed rows that never wrap, so the cards below never move when the window or the status text changes */
-      #autotag-head { display: flex; flex-direction: column; gap: 6px; padding: 10px 18px 8px; flex-shrink: 0; border-bottom: 1px solid #333; }
+      #scout-head, #autotag-head { display: flex; flex-direction: column; gap: 6px; padding: 10px 18px 8px; flex-shrink: 0; border-bottom: 1px solid #333; }
       .at-row { display: flex; align-items: center; flex-wrap: nowrap; gap: 10px; height: 26px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
       .at-row::-webkit-scrollbar { display: none; }
       .at-row > * { flex-shrink: 0; white-space: nowrap; }
@@ -7912,6 +7976,9 @@ render();
       .at-mode { background: rgba(255,255,255,.06); border: 1px solid #444; color: #999; border-radius: 12px; padding: 2px 10px; font-size: 12px; line-height: 18px; cursor: pointer; }
       .at-mode.on { color: #fff; background: rgba(255,255,255,.14); }
       /* ── For You picks ── */
+      .sp-badge { position: absolute; top: 4px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: #2c7be5; color: #fff; font-size: 10px !important; font-weight: 700; line-height: 16px; text-align: center; pointer-events: none; }
+      nav .scout-tab .sp-badge { top: 6px; right: 4px; }
+      #sp-mobile-nav .sp-nav-btn .sp-badge { top: 4px; right: calc(50% - 20px); }
       #scout-grid { flex: 1; overflow-y: auto; padding: 14px 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; align-content: start; grid-auto-rows: max-content; }
       .scout-card { background: #181818; border: 1px solid #2c2c2c; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
       .scout-cover { position: relative; aspect-ratio: 9 / 14; background: #111; cursor: pointer; }
@@ -7967,7 +8034,7 @@ render();
       .at-sw-done { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 30px; color: #999; font-size: 14px; line-height: 1.5; }
       #at-lowconf { padding: 8px 18px; background: rgba(79,195,247,.10); border-bottom: 1px solid #1d4e63; font-size: 12px; color: #9ed8f0; line-height: 1.45; flex-shrink: 0; }
       #at-restore { display: flex; align-items: center; gap: 10px; padding: 8px 18px; background: rgba(255,193,7,.12); border-bottom: 1px solid #5a4a10; font-size: 13px; flex-wrap: wrap; flex-shrink: 0; }
-      #autotag-msg { grid-column: 1 / -1; color: #888; text-align: center; padding: 40px 10px; font-size: 13px; line-height: 1.6; }
+      .scout-msg, #autotag-msg { grid-column: 1 / -1; color: #888; text-align: center; padding: 40px 10px; font-size: 13px; line-height: 1.6; }
       .at-score { position: absolute; bottom: 4px; left: 4px; background: rgba(0,0,0,.7); color: #ddd; border-radius: 8px; padding: 1px 7px; font-size: 11px; pointer-events: none; z-index: 2; }
       .sp-bubbles { position: absolute; left: 4px; right: 4px; bottom: 4px; z-index: 3; display: flex; flex-wrap: wrap; gap: 3px; align-items: flex-end; pointer-events: none; max-height: 70%; overflow: hidden; }
       .sp-bubble { pointer-events: auto; display: inline-flex; align-items: center; max-width: 100%; background: rgba(0,0,0,.72); color: #ddd; border-radius: 10px; padding: 1px 7px; font-size: 11px; line-height: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
@@ -7994,7 +8061,7 @@ render();
       .at-bar.run i { background-image: linear-gradient(90deg, rgba(255,255,255,.0), rgba(255,255,255,.25), rgba(255,255,255,.0)); background-size: 40px 100%; animation: at-shine 1.4s linear infinite; background-color: #4fc3f7; }
       .at-bar b { position: absolute; top: 0; bottom: 0; width: 2px; background: #ffc107; }
       @keyframes at-shine { from { background-position: -40px 0; } to { background-position: 160px 0; } }
-      nav .autotag-tab, #sp-mobile-nav .sp-nav-btn { position: relative; }
+      nav .autotag-tab, nav .scout-tab, #sp-mobile-nav .sp-nav-btn { position: relative; }
       .sp-prog { position: absolute; left: 0; bottom: 0; height: 3px; background: #4fc3f7; border-radius: 2px; pointer-events: none; transition: width .6s; max-width: 100%; }
       #sp-sync-note { position: fixed; left: 12px; bottom: 12px; z-index: 99999; max-width: min(420px, calc(100vw - 24px)); background: #1e1e1e; border: 1px solid #555; color: #ddd; border-radius: 8px; padding: 8px 12px; font-size: 12px; line-height: 1.4; box-shadow: 0 4px 20px rgba(0,0,0,.7); cursor: pointer; display: none; }
       #sp-sync-note.warn { border-color: #f44336; background: #3a1a1a; color: #ffb4a8; }
@@ -8129,10 +8196,10 @@ render();
       .thumb-tool.braces-on { color: #4fc3f7; }
       @media (hover: none) { .thumb-tool { opacity: .9; } }
       @media (max-width: 768px) {
-        #autotag-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 500; background: #0d0d0d; }
+        #autotag-view, #scout-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 500; background: #0d0d0d; }
         #autotag-grid, #scout-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 8px; }
         .scout-banner { padding: 8px 10px; }
-        #autotag-head { padding: 8px 10px; }
+        #autotag-head, #scout-head { padding: 8px 10px; }
         #author-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 3500; background: #0d0d0d; }
         .author-view-close { display: none; }   /* swipe right (or the browser's back) closes the page */
         /* the controls (play, size, sort buttons) get their own row under the title */
@@ -8796,7 +8863,7 @@ render();
 
         /* every full-screen view stops at the tab bar and keeps clear of the notch */
         #player-view { bottom: var(--sp-nav-h) !important; background: #000; }
-        #author-view, #autotag-view, #recents-grid-view { bottom: var(--sp-nav-h) !important; padding-top: var(--sp-top); box-sizing: border-box; }
+        #author-view, #autotag-view, #scout-view, #recents-grid-view { bottom: var(--sp-nav-h) !important; padding-top: var(--sp-top); box-sizing: border-box; }
         #stars-view { bottom: var(--sp-nav-h) !important; padding-top: var(--sp-top) !important; box-sizing: border-box; }
         #author-view { border-left: 1px solid rgba(255,255,255,.08); }
 
