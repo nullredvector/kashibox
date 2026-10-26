@@ -6395,7 +6395,7 @@ render();
   }
 
   function scoutBuckets() {
-    const out = { pending: [], opened: [], liked: [], skipped: [] };
+    const out = { pending: [], liked: [], skipped: [] };
     if (!scoutData) return out;
     const dec = scoutData.decisions || {};
     for (const c of scoutData.candidates || []) {
@@ -6403,8 +6403,7 @@ render();
       const auto = scoutInLikes(c.id);
       if (d === 'liked' || auto) out.liked.push(c);
       else if (d === 'skipped') out.skipped.push(c);
-      else if (d === 'opened') out.opened.push(c);
-      else out.pending.push(c);
+      else out.pending.push(c);      // 'opened' stays pending: it only marks the card, you still choose Liked or Skip
     }
     return out;
   }
@@ -6466,14 +6465,29 @@ render();
     } catch (e) { spToast('Could not save that (' + (e.message || e) + ')'); scoutSig = ''; scoutLoad(); }
   }
 
+  // Was a tag right (1) or wrong (-1)? Pressing the same answer again forgets it.
+  async function scoutTagVote(id, tag, value) {
+    if (!scoutData) return;
+    const all = scoutData.tagFeedback || (scoutData.tagFeedback = {});
+    const mine = all[id] || (all[id] = {});
+    const v = mine[tag] === value ? 0 : value;
+    if (v === 0) delete mine[tag]; else mine[tag] = v;
+    renderScoutView();
+    try {
+      const r = await fetch('/api/scout/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, tag, value: v }) });
+      if (!r.ok) throw new Error('status ' + r.status);
+    } catch (e) { spToast('Could not save that (' + (e.message || e) + ')'); scoutSig = ''; scoutLoad(); }
+  }
+
   function buildScoutCard(c, bucket) {
     const card = document.createElement('div');
-    card.className = 'scout-card';
+    const wasOpened = bucket === 'pending' && scoutData.decisions[c.id] && scoutData.decisions[c.id].d === 'opened';
+    card.className = 'scout-card' + (wasOpened ? ' opened' : '');
     const url = scoutVideoUrl(c);
     const open = () => {
       if (!url) { spToast('Set the profile link in Settings to open videos from here'); return; }
       window.open(url, '_blank', 'noopener');
-      if (bucket === 'pending') scoutDecide(c.id, 'opened');
+      if (bucket === 'pending' && !wasOpened) scoutDecide(c.id, 'opened');
     };
     const cov = document.createElement('div');
     cov.className = 'scout-cover';
@@ -6483,6 +6497,7 @@ render();
     const badge = document.createElement('span');
     badge.className = 'scout-score'; badge.textContent = Math.round(c.score * 100) + '%'; badge.title = 'How well this fits the tags you taught the AI tagger';
     cov.append(img, badge);
+    if (wasOpened) { const o = document.createElement('span'); o.className = 'scout-opened'; o.textContent = 'Opened'; cov.appendChild(o); }
     cov.addEventListener('click', open);
     const body = document.createElement('div');
     body.className = 'scout-body';
@@ -6492,13 +6507,25 @@ render();
     if (c.desc) body.appendChild(desc);
     if (c.tags && c.tags.length) {
       const tg = document.createElement('div'); tg.className = 'scout-tags';
-      c.tags.forEach(([name, sc]) => { const t = document.createElement('span'); t.className = 'scout-tag'; t.textContent = groupDisplayName(name) + ' ' + Math.round(sc * 100) + '%'; tg.appendChild(t); });
+      const votes = (scoutData.tagFeedback && scoutData.tagFeedback[c.id]) || {};
+      c.tags.forEach(([name, sc]) => {
+        const t = document.createElement('span');
+        t.className = 'scout-tag' + (votes[name] === 1 ? ' right' : votes[name] === -1 ? ' wrong' : '');
+        const lab = document.createElement('span'); lab.textContent = groupDisplayName(name) + ' ' + Math.round(sc * 100) + '%';
+        t.appendChild(lab);
+        [[1, '✓', 'Yes, this video fits this tag'], [-1, '✗', 'No, this tag is wrong for this video']].forEach(([val, ch, tip]) => {
+          const b = document.createElement('button'); b.className = 'scout-vote' + (votes[name] === val ? ' on' : ''); b.textContent = ch; b.title = tip;
+          b.addEventListener('click', e => { e.stopPropagation(); scoutTagVote(c.id, name, val); });
+          t.appendChild(b);
+        });
+        tg.appendChild(t);
+      });
       body.appendChild(tg);
     }
     const act = document.createElement('div');
     act.className = 'scout-actions';
     const btn = (text, cls, fn, title) => { const b = document.createElement('button'); b.className = 'scout-btn ' + cls; b.textContent = text; if (title) b.title = title; b.addEventListener('click', e => { e.stopPropagation(); fn(); }); act.appendChild(b); };
-    if (bucket === 'pending' || bucket === 'opened') {
+    if (bucket === 'pending') {
       btn('Open', 'primary', open, url ? 'Open this video on the site' : 'Set the profile link in Settings first');
       btn('I liked it', '', () => scoutDecide(c.id, 'liked'), 'Teaches the scorer that this was a good pick');
       btn('Skip', '', () => scoutDecide(c.id, 'skipped'), 'Not for me: teaches the scorer this was a bad pick');
@@ -6522,8 +6549,8 @@ render();
     const title = document.createElement('span'); title.className = 'stars-main-title'; title.textContent = 'For You picks';
     const modes = document.createElement('div'); modes.className = 'at-modes';
     const b = scoutBuckets();
-    const labels = { pending: 'Pending', opened: 'Opened', liked: 'Liked', skipped: 'Skipped' };
-    ['pending', 'opened', 'liked', 'skipped'].forEach(m => {
+    const labels = { pending: 'Pending', liked: 'Liked', skipped: 'Skipped' };
+    ['pending', 'liked', 'skipped'].forEach(m => {
       const el = document.createElement('button');
       el.className = 'at-mode' + (scoutBucket === m ? ' on' : '');
       el.textContent = labels[m] + (scoutData ? ' ' + b[m].length.toLocaleString() : '');
@@ -7990,7 +8017,13 @@ render();
       .scout-author { font-weight: 600; font-size: 13px; color: #eee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .scout-desc { font-size: 12px; color: #9a9a9a; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
       .scout-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-      .scout-tag { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: rgba(79,195,247,.14); color: #9ed8f0; white-space: nowrap; }
+      .scout-tag { font-size: 11px; padding: 1px 4px 1px 7px; border-radius: 9px; background: rgba(79,195,247,.14); color: #9ed8f0; white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; }
+      .scout-tag.right { background: rgba(76,175,80,.22); color: #a5d6a7; }
+      .scout-tag.wrong { background: rgba(244,67,54,.2); color: #ef9a9a; text-decoration: line-through; }
+      .scout-vote { border: 0; background: transparent; color: inherit; opacity: .45; cursor: pointer; font-size: 12px; padding: 0 3px; line-height: 1.4; }
+      .scout-vote:hover, .scout-vote.on { opacity: 1; }
+      .scout-card.opened { border-color: #2c7be5; }
+      .scout-opened { position: absolute; left: 6px; top: 6px; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px; background: #2c7be5; color: #fff; pointer-events: none; }
       .scout-actions { display: flex; align-items: center; gap: 6px; padding: 8px 10px 10px; margin-top: auto; }
       .scout-btn { flex: 1; background: rgba(255,255,255,.07); border: 1px solid #444; color: #ddd; border-radius: 14px; padding: 5px 4px; font-size: 12px; cursor: pointer; white-space: nowrap; }
       .scout-btn.primary { background: #2c5d8f; border-color: #3d79b5; color: #fff; }

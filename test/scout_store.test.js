@@ -82,3 +82,20 @@ test('settings: the scout limits are whitelisted and range-checked', () => {
 });
 
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+test('tag answers: only tags the scorer named, right/wrong/forget, kept beside the decisions', () => {
+  const id = '1000000000000000002';                                   // has tags t1..t3 from the test above
+  assert.equal(scout.recordTagFeedback(id, 'nope', 1).code, 404);
+  assert.equal(scout.recordTagFeedback('1000000000000000099', 't1', 1).code, 404);
+  assert.equal(scout.recordTagFeedback(id, 't1', 2).code, 400);
+  assert.equal(scout.recordTagFeedback(id, 't1', 1).code, 200);
+  assert.equal(scout.recordTagFeedback(id, 't2', -1).code, 200);
+  assert.equal(scout.recordDecision(id, 'liked').code, 200);          // a decision does not wipe the tag answers
+  let r = scout.loadScout();
+  assert.deepEqual(r.tagFeedback[id], { t1: 1, t2: -1 });
+  assert.equal(r.decisions[id].d, 'liked');
+  scout.recordTagFeedback(id, 't1', 0);
+  scout.recordTagFeedback(id, 't2', 0);
+  assert.equal(scout.loadScout().tagFeedback[id], undefined);
+  scout.recordDecision(id, 'pending');
+});

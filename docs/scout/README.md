@@ -52,9 +52,12 @@ The cover image must exist at `scout/covers/<id>.jpg` (kashibox builds that path
 
 ### `scout_feedback.json`, written by kashibox only
 ```json
-{ "decisions": { "7700000000000000013": { "d": "liked", "t": 1790000000000 } } }
+{ "decisions": { "7700000000000000013": { "d": "liked", "t": 1790000000000 } },
+  "tagFeedback": { "7700000000000000013": { "tagname": 1, "othertag": -1 } } }
 ```
 `d` is `liked` (you said it was a good pick), `skipped` (a bad pick: **the only real negative label there is**) or `opened` (you opened it but have not decided). A candidate whose id appears in the archive's Likes list also counts as liked: that is the strongest signal, because you really liked it on the site.
+
+`tagFeedback` is your answer on each tag the scorer named for a pick: `1` = the video does fit that tag, `-1` = it does not. These are real labels for those tags (independent of liked/skipped), and the best signal for fixing a tag's classifier. `opened` is only a mark on the card; the pick stays pending until you choose.
 
 **Videos the scout saw but never suggested are not negatives.** The scout saw them, you did not. Treat them as unlabeled.
 

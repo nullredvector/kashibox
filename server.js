@@ -334,7 +334,7 @@ http.createServer((req, res) => {
 
   // ── For You picks (the suggestion queue) ───────────────────────────────────
   // GET  /api/scout                       → { available, candidates, decisions, status }  (what the scout collected, what you decided)
-  // POST /api/scout/feedback { id, decision } → decision: liked | skipped | opened | pending (forget). Nothing is ever liked for you.
+  // POST /api/scout/feedback { id, decision } → decision: liked | skipped | opened | pending (forget); or { id, tag, value } → was a tag right (1), wrong (-1) or forget (0). Nothing is ever liked for you.
   // The scout and the scorer are other programs; they talk to kashibox only through files (see docs/scout/README.md).
   if (pathname === '/api/scout' && req.method === 'GET') {
     sendBody(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, JSON.stringify(scoutStore.loadScout()));
@@ -355,7 +355,7 @@ http.createServer((req, res) => {
       let d;
       try { d = JSON.parse(Buffer.concat(chunks).toString()); } catch (_) { return sendJson(400, { error: 'Invalid JSON' }); }
       if (!d || typeof d !== 'object' || Array.isArray(d)) return sendJson(400, { error: 'Invalid JSON' });
-      try { const r = scoutStore.recordDecision(d.id, d.decision); const { code, ...rest } = r; sendJson(code, rest); }
+      try { const r = d.tag !== undefined ? scoutStore.recordTagFeedback(d.id, d.tag, d.value) : scoutStore.recordDecision(d.id, d.decision); const { code, ...rest } = r; sendJson(code, rest); }
       catch (_) { sendJson(500, { error: 'could not save' }); }
     });
     return;
