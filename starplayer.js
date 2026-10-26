@@ -6369,20 +6369,62 @@ render();
   let scoutData = null, scoutError = '', scoutBucket = 'pending', scoutShown = 60, scoutTimer = null, scoutSig = '';
   let scoutTabActive = false, scoutViewEl = null;
 
+  function scoutAgo(ms) {
+    if (!ms) return '';
+    const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+    return m < 1 ? 'just now' : m < 90 ? m + ' min ago' : Math.round(m / 60) + ' h ago';
+  }
+
+  // One line for the status bar: { tone: ok | rest | warn | bad | off, label, text }
+  function scoutStatusInfo(st) {
+    const on = !!settings.scoutEnabled;
+    if (!st) {
+      if (!on) return { tone: 'off', label: 'Off', text: 'The scout is switched off. Turn it on in Settings.' };
+      return { tone: 'rest', label: 'Waiting', text: 'The scout is on but has not reported yet. It starts at its next check.' };
+    }
+    const stale = st.updated && Date.now() - st.updated > 20 * 60000;
+    switch (st.state) {
+      case 'running':
+        if (stale) return { tone: 'warn', label: 'Not responding', text: 'It said it was looking through the feed, but has not reported for ' + scoutAgo(st.updated).replace(' ago', '') + '. It may be down.' };
+        return { tone: 'ok', label: 'Running', text: 'Looking through the feed now.' };
+      case 'idle': return { tone: 'rest', label: 'Resting', text: st.message || 'Between sessions. It looks again after a short break.' };
+      case 'paused': return { tone: 'warn', label: 'Paused', text: st.message || 'Outside your hours, or today’s limit is reached.' };
+      case 'off': return { tone: 'off', label: 'Off', text: on ? 'Switching on… it starts at its next check.' : 'The scout is switched off. Turn it on in Settings.' };
+      case 'challenge': return { tone: 'bad', label: 'Stopped', text: 'The site asked it to verify. Finish the check in your own browser; it carries on by itself.' };
+      case 'login': return { tone: 'bad', label: 'Needs login', text: 'The site logged the scout out. Push your session again from the ttpull extension.' };
+      case 'error': return { tone: 'bad', label: 'Stopped', text: st.message || 'Stopped by an error.' };
+    }
+    return { tone: 'rest', label: st.state || 'Unknown', text: st.message || '' };
+  }
+
+  // The same status as one sentence (Settings page)
   function scoutStatusText(st) {
-    const ago = st.updated ? Math.max(0, Math.round((Date.now() - st.updated) / 60000)) : null;
-    const when = ago == null ? '' : ago < 1 ? ' (just now)' : ago < 90 ? ' (' + ago + ' min ago)' : ' (' + Math.round(ago / 60) + ' h ago)';
-    const today = st.today && st.today.date ? ' Today: looked at ' + st.today.viewed + ', picked ' + st.today.collected + '.' : '';
-    const base = {
-      off: 'The scout is switched off.',
-      idle: 'Waiting for its next check.',
-      running: 'Looking through the feed now.',
-      paused: 'Paused: outside your hours, or today’s limit is reached.',
-      challenge: 'Stopped: the site asked it to verify. Finish the check in your own browser; it carries on by itself.',
-      login: 'Stopped: the site logged the scout out. Push your session again from the ttpull extension.',
-      error: 'Stopped by an error' + (st.message ? ': ' + st.message : '.'),
-    }[st.state] || '';
-    return base + when + today;
+    const i = scoutStatusInfo(st);
+    const today = st && st.today && st.today.date ? ' Today: looked at ' + st.today.viewed + ', picked ' + st.today.collected + '.' : '';
+    return i.label + ': ' + i.text + (st && st.updated ? ' (' + scoutAgo(st.updated) + ')' : '') + today;
+  }
+
+  // The status bar above the grid: a coloured dot, what the scout is doing, today's numbers, and when it last reported
+  function buildScoutStatus(st) {
+    const info = scoutStatusInfo(st);
+    const bar = document.createElement('div');
+    bar.className = 'scout-status ' + info.tone;
+    const dot = document.createElement('span'); dot.className = 'scout-dot';
+    const label = document.createElement('b'); label.textContent = info.label;
+    const text = document.createElement('span'); text.className = 'scout-status-text'; text.textContent = info.text;
+    bar.append(dot, label, text);
+    const t = st && st.today && st.today.date ? st.today : null;
+    if (t) {
+      const cap = Number(settings.scoutDaily) || 0;
+      const nums = document.createElement('span'); nums.className = 'scout-status-nums';
+      nums.textContent = 'Today: looked at ' + t.viewed + (cap ? ' of ' + cap : '') + ' · picked ' + t.collected;
+      bar.appendChild(nums);
+    }
+    if (st && st.updated) {
+      const age = document.createElement('span'); age.className = 'scout-age'; age.dataset.t = st.updated; age.textContent = 'updated ' + scoutAgo(st.updated);
+      bar.appendChild(age);
+    }
+    return bar;
   }
 
   // The likes list of the archive as a Set (so a pick you liked is noticed without you pressing anything)
@@ -6450,6 +6492,7 @@ render();
     scoutTimer = setInterval(() => {
       if (!scoutTabActive) { clearInterval(scoutTimer); scoutTimer = null; return; }
       scoutLoad();
+      document.querySelectorAll('.scout-age').forEach(a => { a.textContent = 'updated ' + scoutAgo(Number(a.dataset.t)); });
     }, 60000);
   }
 
@@ -6566,13 +6609,7 @@ render();
     grid.id = 'scout-grid';
     const msg = text => { const d = document.createElement('div'); d.className = 'scout-msg'; d.textContent = text; grid.appendChild(d); };
     const st = scoutData && scoutData.status;
-    let banner = null;
-    if (st && ['challenge', 'login', 'error'].includes(st.state)) {
-      banner = document.createElement('div'); banner.className = 'scout-banner warn'; banner.textContent = scoutStatusText(st);
-    } else if (st || (scoutData && scoutData.available)) {
-      banner = document.createElement('div'); banner.className = 'scout-banner';
-      banner.textContent = st ? scoutStatusText(st) : 'Picks are in. The scout has not reported its status yet.';
-    }
+    const banner = scoutData ? buildScoutStatus(st) : null;
     if (scoutError) msg(scoutError);
     else if (!scoutData) msg('Loading…');
     else if (!scoutData.available) msg(settings.scoutEnabled ? 'The scout is on but has not suggested anything yet. It starts at its next check.' : 'No picks yet. Turn on the For You scout in Settings.');
@@ -8027,8 +8064,20 @@ render();
       .scout-actions { display: flex; align-items: center; gap: 6px; padding: 8px 10px 10px; margin-top: auto; }
       .scout-btn { flex: 1; background: rgba(255,255,255,.07); border: 1px solid #444; color: #ddd; border-radius: 14px; padding: 5px 4px; font-size: 12px; cursor: pointer; white-space: nowrap; }
       .scout-btn.primary { background: #2c5d8f; border-color: #3d79b5; color: #fff; }
-      .scout-banner { padding: 8px 18px; font-size: 12px; color: #9a9a9a; border-bottom: 1px solid #2a2a2a; flex-shrink: 0; line-height: 1.45; }
-      .scout-banner.warn { background: rgba(255,193,7,.10); border-bottom-color: #5c4a10; color: #f1d27a; }
+      .scout-status { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 8px 18px; font-size: 12px; color: #9a9a9a; border-bottom: 1px solid #2a2a2a; flex-shrink: 0; line-height: 1.45; }
+      .scout-status b { color: #ddd; font-weight: 600; }
+      .scout-status-text { flex: 1 1 200px; min-width: 0; }
+      .scout-status-nums, .scout-age { white-space: nowrap; color: #8a8a8a; }
+      .scout-dot { width: 9px; height: 9px; border-radius: 50%; background: #666; flex-shrink: 0; }
+      .scout-status.ok .scout-dot { background: #4caf50; box-shadow: 0 0 0 0 rgba(76,175,80,.6); animation: scoutPulse 2s infinite; }
+      .scout-status.rest .scout-dot { background: #4fc3f7; }
+      .scout-status.warn { background: rgba(255,193,7,.10); border-bottom-color: #5c4a10; color: #f1d27a; }
+      .scout-status.warn .scout-dot { background: #ffc107; }
+      .scout-status.warn b { color: #f1d27a; }
+      .scout-status.bad { background: rgba(244,67,54,.10); border-bottom-color: #6b2a25; color: #f0a39b; }
+      .scout-status.bad .scout-dot { background: #f44336; }
+      .scout-status.bad b { color: #f0a39b; }
+      @keyframes scoutPulse { 70% { box-shadow: 0 0 0 7px rgba(76,175,80,0); } 100% { box-shadow: 0 0 0 0 rgba(76,175,80,0); } }
       #autotag-grid { flex: 1; overflow-y: auto; padding: 14px 18px; display: grid; grid-template-columns: repeat(auto-fill,minmax(150px,1fr)); gap: 14px; align-content: start; }
       /* phone swipe review */
       #at-swipe { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -8231,7 +8280,7 @@ render();
       @media (max-width: 768px) {
         #autotag-view, #scout-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 500; background: #0d0d0d; }
         #autotag-grid, #scout-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 8px; }
-        .scout-banner { padding: 8px 10px; }
+        .scout-status { padding: 8px 10px; }
         #autotag-head, #scout-head { padding: 8px 10px; }
         #author-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 3500; background: #0d0d0d; }
         .author-view-close { display: none; }   /* swipe right (or the browser's back) closes the page */
