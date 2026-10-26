@@ -1552,7 +1552,7 @@
 
   const GEAR_PATH = '<path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>';
   const SETTINGS_KEY = 'sp_settings';
-  let settings = { profileUrl: '', debugBanner: false, numericName: '', numericMin: 10, numericMax: 23 };
+  let settings = { profileUrl: '', debugBanner: false, numericName: '', numericMin: 10, numericMax: 23, scoutEnabled: false, scoutDaily: 100, scoutMin: 60, scoutFrom: 0, scoutTo: 23 };
   // The one-per-video number (10–23) is called "numeric tags" unless the user renames it in Settings
   const NUM_EMPTY = '#';
   const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1953,6 +1953,69 @@
         dlPresets.appendChild(b);
       });
     }
+
+    // ── For You scout ──
+    const sc = section('For You scout', 'A program on your server can look through the For You feed and suggest videos for you to open and like yourself, judged by the tags you taught the AI tagger. It never likes, follows or posts anything, and it stops and tells you if the site asks it to verify. Picks appear in Review, under For You picks. It is off until you turn it on.');
+    const scStatus = document.createElement('div');
+    scStatus.className = 'set-status';
+    const scOn = document.createElement('label');
+    scOn.className = 'set-check';
+    const scCb = document.createElement('input');
+    scCb.type = 'checkbox';
+    scCb.checked = Boolean(settings.scoutEnabled);
+    const scTxt = document.createElement('span');
+    scTxt.textContent = 'Look for picks';
+    scCb.addEventListener('change', () => saveSettings({ scoutEnabled: scCb.checked }).then(m => {
+      scStatus.textContent = m || (scCb.checked ? 'On. The scout starts at its next check.' : 'Off. The scout stops at its next check.');
+    }));
+    scOn.append(scCb, scTxt);
+    sc.appendChild(scOn);
+    const scNum = (label, unit, key, min, max, fallback) => {
+      const row = document.createElement('div');
+      row.className = 'set-try';
+      const lab = document.createElement('span'); lab.textContent = label; lab.style.cssText = 'color:#ccc;font-size:14px;flex:1;min-width:0';
+      const inp = document.createElement('input');
+      inp.className = 'set-input set-try-input'; inp.type = 'number'; inp.min = String(min); inp.max = String(max); inp.step = '1';
+      inp.value = String(Number.isInteger(settings[key]) ? settings[key] : fallback); inp.style.maxWidth = '84px';
+      const u = document.createElement('span'); u.textContent = unit; u.style.cssText = 'color:#888;font-size:13px';
+      let t = null;
+      inp.addEventListener('input', () => {
+        clearTimeout(t);
+        const v = parseInt(inp.value, 10);
+        if (!Number.isInteger(v) || v < min || v > max) { scStatus.textContent = label + ': a whole number from ' + min + ' to ' + max + '.'; return; }
+        t = setTimeout(() => saveSettings({ [key]: v }).then(m => { scStatus.textContent = m || 'Saved.'; }), 450);
+      });
+      row.append(lab, inp, u);
+      sc.appendChild(row);
+    };
+    scNum('Videos to look at per day', 'videos', 'scoutDaily', 0, 1000, 100);
+    scNum('Only suggest picks scoring at least', '%', 'scoutMin', 0, 100, 60);
+    const hoursRow = document.createElement('div');
+    hoursRow.className = 'set-try';
+    const hLab = document.createElement('span'); hLab.textContent = 'Only look between these hours'; hLab.style.cssText = 'color:#ccc;font-size:14px;flex:1;min-width:0';
+    const mkHour = key => {
+      const i = document.createElement('input');
+      i.className = 'set-input set-try-input'; i.type = 'number'; i.min = '0'; i.max = '23'; i.step = '1'; i.style.maxWidth = '64px';
+      i.value = String(Number.isInteger(settings[key]) ? settings[key] : (key === 'scoutFrom' ? 0 : 23));
+      return i;
+    };
+    const hFrom = mkHour('scoutFrom'), hTo = mkHour('scoutTo');
+    let hTimer = null;
+    const hSave = () => {
+      const a = parseInt(hFrom.value, 10), b = parseInt(hTo.value, 10);
+      if (![a, b].every(v => Number.isInteger(v) && v >= 0 && v <= 23)) { scStatus.textContent = 'Hours are whole numbers from 0 to 23.'; return; }
+      clearTimeout(hTimer);
+      hTimer = setTimeout(() => saveSettings({ scoutFrom: a, scoutTo: b }).then(m => { scStatus.textContent = m || (a <= b ? 'Saved: from ' + a + ':00 to ' + b + ':59.' : 'Saved: from ' + a + ':00 through the night to ' + b + ':59.'); }), 450);
+    };
+    hFrom.addEventListener('input', hSave); hTo.addEventListener('input', hSave);
+    const hDash = document.createElement('span'); hDash.textContent = 'to'; hDash.style.cssText = 'color:#888;font-size:13px';
+    hoursRow.append(hLab, hFrom, hDash, hTo);
+    sc.append(hoursRow, scStatus);
+    scStatus.textContent = 'Checking the scout…';
+    fetch('/api/scout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!scStatus.isConnected || scStatus.textContent !== 'Checking the scout…') return;
+      scStatus.textContent = d && d.status ? scoutStatusText(d.status) : (d && d.available ? 'No status from the scout yet.' : 'The scout has not run yet.');
+    }).catch(() => { if (scStatus.textContent === 'Checking the scout…') scStatus.textContent = ''; });
 
     // ── hidden videos ──
     const hid = section('Hidden videos', 'Hide a video from a thumbnail, the player or the Home feed. It disappears from every list, the feed and the TV, and is never deleted. Bring videos back here.');
@@ -5766,6 +5829,7 @@ render();
 
   let autotagTabActive = false;
   let autotagViewEl    = null;
+  let atSource         = 'tags';       // 'tags' (the tag review) | 'scout' (For You picks)
   let atTag            = 'braces';
   let atMode           = 'pending';   // 'pending' | 'accepted' | 'rejected'
   let atViewMode       = (() => { try { return localStorage.getItem('sp_at_view') === 'grid' ? 'grid' : 'cards'; } catch (_) { return 'cards'; } })();   // phones: swipe cards or the grid
@@ -6189,6 +6253,7 @@ render();
     if (!autotagViewEl) return;
     releaseGridPreviews(autotagViewEl);
     if (atSwipeCleanup) { atSwipeCleanup(); atSwipeCleanup = null; }
+    if (atSource === 'scout') { renderScoutView(); return; }
     const openPanels = ['at-picker', 'at-run-panel'].map(id => document.getElementById(id)).filter(Boolean);   // survive a re-render
     autotagViewEl.innerHTML = '';
 
@@ -6230,6 +6295,10 @@ render();
     const pick = document.createElement('button');
     pick.className = 'at-mode'; pick.textContent = 'Tags…'; pick.title = 'Choose which of your groups the AI tagger learns';
     pick.addEventListener('click', openTagPicker);
+    const forBtn = document.createElement('button');
+    forBtn.id = 'at-scout-btn'; forBtn.className = 'at-mode'; forBtn.title = 'Videos suggested from the For You feed, for you to open and like yourself';
+    forBtn.textContent = scoutButtonLabel();
+    forBtn.addEventListener('click', () => { atSource = 'scout'; scoutBucket = 'pending'; scoutShown = 60; scoutLoad(); scoutPoll(); renderAutotagView(); });
     const runBtn = document.createElement('button');
     runBtn.className = 'at-mode'; runBtn.textContent = 'Run…'; runBtn.title = 'Train the AI tagger now, or set it to run nightly';
     runBtn.addEventListener('click', openRunPanel);
@@ -6237,7 +6306,7 @@ render();
     chip.id = 'at-run-chip'; chip.className = 'at-note';
     const row1 = document.createElement('div'); row1.className = 'at-row';
     const row2 = document.createElement('div'); row2.className = 'at-row';
-    row1.append(title, sel, modes, pick, runBtn);
+    row1.append(title, sel, modes, pick, forBtn, runBtn);
     head.append(row1, row2);
     atUpdateChip();
 
@@ -6288,6 +6357,202 @@ render();
     if (!cardMode) observeGridPreviews(grid);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FOR YOU PICKS — videos a scout on the server suggests; you open and like them yourself
+  // The scout (ttpull) writes the candidates, autotagTT scores them, this page only shows them and records what you
+  // decided. Nothing here likes anything. See docs/scout/README.md.
+  // ═══════════════════════════════════════════════════════════════════════════
+  let scoutData = null, scoutError = '', scoutBucket = 'pending', scoutShown = 60, scoutTimer = null, scoutSig = '';
+
+  function scoutStatusText(st) {
+    const ago = st.updated ? Math.max(0, Math.round((Date.now() - st.updated) / 60000)) : null;
+    const when = ago == null ? '' : ago < 1 ? ' (just now)' : ago < 90 ? ' (' + ago + ' min ago)' : ' (' + Math.round(ago / 60) + ' h ago)';
+    const today = st.today && st.today.date ? ' Today: looked at ' + st.today.viewed + ', picked ' + st.today.collected + '.' : '';
+    const base = {
+      off: 'The scout is switched off.',
+      idle: 'Waiting for its next check.',
+      running: 'Looking through the feed now.',
+      paused: 'Paused: outside your hours, or today’s limit is reached.',
+      challenge: 'Stopped: the site asked it to verify. Finish the check in your own browser; it carries on by itself.',
+      login: 'Stopped: the site logged the scout out. Push your session again from the ttpull extension.',
+      error: 'Stopped by an error' + (st.message ? ': ' + st.message : '.'),
+    }[st.state] || '';
+    return base + when + today;
+  }
+
+  // The likes list of the archive as a Set (so a pick you liked is noticed without you pressing anything)
+  let _scoutLikes = null;
+  function scoutInLikes(id) {
+    const d = _dbCache;
+    if (!d || !d.likes) return false;
+    if (!_scoutLikes || _scoutLikes.src !== d) _scoutLikes = { src: d, set: new Set([...(d.likes.officialList || []), ...(d.likes.downloaded || [])].map(String)) };
+    return _scoutLikes.set.has(String(id));
+  }
+
+  function scoutBuckets() {
+    const out = { pending: [], opened: [], liked: [], skipped: [] };
+    if (!scoutData) return out;
+    const dec = scoutData.decisions || {};
+    for (const c of scoutData.candidates || []) {
+      const d = dec[c.id] && dec[c.id].d;
+      const auto = scoutInLikes(c.id);
+      if (d === 'liked' || auto) out.liked.push(c);
+      else if (d === 'skipped') out.skipped.push(c);
+      else if (d === 'opened') out.opened.push(c);
+      else out.pending.push(c);
+    }
+    return out;
+  }
+
+  function scoutButtonLabel() {
+    const n = scoutData ? scoutBuckets().pending.length : 0;
+    return 'For You picks' + (n ? ' ' + n.toLocaleString() : '');
+  }
+
+  // The page of the video on the site: the profile link from Settings + /video/<id> (needs a link that ends in {username})
+  function scoutVideoUrl(c) {
+    const t = String(settings.profileUrl || '').trim();
+    if (!c.author || !profileUrlTemplateOk(t) || !t.endsWith('{username}')) return '';
+    return profileUrlFor(c.author) + '/video/' + c.id;
+  }
+
+  async function scoutLoad() {
+    try {
+      const r = await fetch('/api/scout', { cache: 'no-store' });
+      if (!r.ok) throw new Error('status ' + r.status);
+      const d = await r.json();
+      const sig = JSON.stringify([(d.candidates || []).map(c => c.id + ':' + c.score), Object.keys(d.decisions || {}).length, d.status && d.status.updated, d.available]);
+      scoutError = '';
+      const same = sig === scoutSig && scoutData;
+      scoutSig = sig; scoutData = d;
+      if (same) return;   // nothing new: leave the screen (and its scroll position) alone
+    } catch (e) { scoutError = 'Could not read the picks (' + (e.message || e) + ').'; }
+    if (!autotagTabActive) return;
+    if (atSource === 'scout') renderScoutView();
+    else { const b = document.getElementById('at-scout-btn'); if (b) b.textContent = scoutButtonLabel(); }
+  }
+
+  function scoutPoll() {
+    clearInterval(scoutTimer);
+    scoutTimer = setInterval(() => {
+      if (!autotagTabActive || atSource !== 'scout') { clearInterval(scoutTimer); scoutTimer = null; return; }
+      scoutLoad();
+    }, 60000);
+  }
+
+  // decision: liked | skipped | opened | pending (undo). Shown at once, then saved; a failed save brings the old state back.
+  async function scoutDecide(id, decision) {
+    if (!scoutData) return;
+    const dec = scoutData.decisions || (scoutData.decisions = {});
+    if (decision === 'pending') delete dec[id]; else dec[id] = { d: decision, t: Date.now() };
+    renderScoutView();
+    try {
+      const r = await fetch('/api/scout/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, decision }) });
+      if (!r.ok) throw new Error('status ' + r.status);
+    } catch (e) { spToast('Could not save that (' + (e.message || e) + ')'); scoutSig = ''; scoutLoad(); }
+  }
+
+  function buildScoutCard(c, bucket) {
+    const card = document.createElement('div');
+    card.className = 'scout-card';
+    const url = scoutVideoUrl(c);
+    const open = () => {
+      if (!url) { spToast('Set the profile link in Settings to open videos from here'); return; }
+      window.open(url, '_blank', 'noopener');
+      if (bucket === 'pending') scoutDecide(c.id, 'opened');
+    };
+    const cov = document.createElement('div');
+    cov.className = 'scout-cover';
+    const img = document.createElement('img');
+    img.loading = 'lazy'; img.alt = ''; img.src = 'data/.appdata/' + c.cover;
+    img.addEventListener('error', () => cov.classList.add('nocover'));
+    const badge = document.createElement('span');
+    badge.className = 'scout-score'; badge.textContent = Math.round(c.score * 100) + '%'; badge.title = 'How well this fits the tags you taught the AI tagger';
+    cov.append(img, badge);
+    cov.addEventListener('click', open);
+    const body = document.createElement('div');
+    body.className = 'scout-body';
+    const who = document.createElement('div'); who.className = 'scout-author'; who.textContent = c.author ? '@' + c.author : '(unknown)';
+    const desc = document.createElement('div'); desc.className = 'scout-desc'; desc.textContent = c.desc || '';
+    body.append(who);
+    if (c.desc) body.appendChild(desc);
+    if (c.tags && c.tags.length) {
+      const tg = document.createElement('div'); tg.className = 'scout-tags';
+      c.tags.forEach(([name, sc]) => { const t = document.createElement('span'); t.className = 'scout-tag'; t.textContent = groupDisplayName(name) + ' ' + Math.round(sc * 100) + '%'; tg.appendChild(t); });
+      body.appendChild(tg);
+    }
+    const act = document.createElement('div');
+    act.className = 'scout-actions';
+    const btn = (text, cls, fn, title) => { const b = document.createElement('button'); b.className = 'scout-btn ' + cls; b.textContent = text; if (title) b.title = title; b.addEventListener('click', e => { e.stopPropagation(); fn(); }); act.appendChild(b); };
+    if (bucket === 'pending' || bucket === 'opened') {
+      btn('Open', 'primary', open, url ? 'Open this video on the site' : 'Set the profile link in Settings first');
+      btn('I liked it', '', () => scoutDecide(c.id, 'liked'), 'Teaches the scorer that this was a good pick');
+      btn('Skip', '', () => scoutDecide(c.id, 'skipped'), 'Not for me: teaches the scorer this was a bad pick');
+    } else {
+      const auto = bucket === 'liked' && !(scoutData.decisions[c.id] && scoutData.decisions[c.id].d === 'liked');
+      if (auto) { const n = document.createElement('span'); n.className = 'at-note'; n.textContent = 'In your likes'; act.appendChild(n); }
+      else btn('Undo', '', () => scoutDecide(c.id, 'pending'));
+    }
+    card.append(cov, body, act);
+    return card;
+  }
+
+  function renderScoutView() {
+    if (!autotagViewEl) return;
+    const prev = autotagViewEl.querySelector('#scout-grid');
+    const keepScroll = prev ? prev.scrollTop : 0;
+    autotagViewEl.innerHTML = '';
+    const head = document.createElement('div');
+    head.id = 'autotag-head';
+    const row1 = document.createElement('div'); row1.className = 'at-row';
+    const title = document.createElement('span'); title.className = 'stars-main-title'; title.textContent = 'For You picks';
+    const modes = document.createElement('div'); modes.className = 'at-modes';
+    const b = scoutBuckets();
+    const labels = { pending: 'Pending', opened: 'Opened', liked: 'Liked', skipped: 'Skipped' };
+    ['pending', 'opened', 'liked', 'skipped'].forEach(m => {
+      const el = document.createElement('button');
+      el.className = 'at-mode' + (scoutBucket === m ? ' on' : '');
+      el.textContent = labels[m] + (scoutData ? ' ' + b[m].length.toLocaleString() : '');
+      el.addEventListener('click', () => { scoutBucket = m; scoutShown = 60; renderScoutView(); });
+      modes.appendChild(el);
+    });
+    const back = document.createElement('button');
+    back.className = 'at-mode'; back.textContent = 'Tag review'; back.title = 'Back to accepting and rejecting tag suggestions';
+    back.addEventListener('click', () => { atSource = 'tags'; clearInterval(scoutTimer); scoutTimer = null; renderAutotagView(); atLoad(); });
+    const refresh = document.createElement('button');
+    refresh.className = 'at-mode'; refresh.textContent = 'Refresh'; refresh.addEventListener('click', () => { scoutSig = ''; scoutLoad(); });
+    row1.append(title, modes, back, refresh);
+    head.appendChild(row1);
+
+    const grid = document.createElement('div');
+    grid.id = 'scout-grid';
+    const msg = text => { const d = document.createElement('div'); d.id = 'autotag-msg'; d.textContent = text; grid.appendChild(d); };
+    const st = scoutData && scoutData.status;
+    let banner = null;
+    if (st && ['challenge', 'login', 'error'].includes(st.state)) {
+      banner = document.createElement('div'); banner.className = 'scout-banner warn'; banner.textContent = scoutStatusText(st);
+    } else if (st || (scoutData && scoutData.available)) {
+      banner = document.createElement('div'); banner.className = 'scout-banner';
+      banner.textContent = st ? scoutStatusText(st) : 'Picks are in. The scout has not reported its status yet.';
+    }
+    if (scoutError) msg(scoutError);
+    else if (!scoutData) msg('Loading…');
+    else if (!scoutData.available) msg(settings.scoutEnabled ? 'The scout is on but has not suggested anything yet. It starts at its next check.' : 'No picks yet. Turn on the For You scout in Settings.');
+    else if (!b[scoutBucket].length) msg(scoutBucket === 'pending' ? 'Nothing waiting. New picks show up here as the scout finds them.' : 'Nothing here yet.');
+    else {
+      b[scoutBucket].slice(0, scoutShown).forEach(c => grid.appendChild(buildScoutCard(c, scoutBucket)));
+      if (b[scoutBucket].length > scoutShown) {
+        const more = document.createElement('button');
+        more.className = 'at-mode'; more.style.gridColumn = '1 / -1'; more.style.justifySelf = 'center';
+        more.textContent = 'Show more (' + (b[scoutBucket].length - scoutShown).toLocaleString() + ' left)';
+        more.addEventListener('click', () => { scoutShown += 60; renderScoutView(); });
+        grid.appendChild(more);
+      }
+    }
+    autotagViewEl.append(head, ...(banner ? [banner] : []), grid);
+    grid.scrollTop = keepScroll;
+  }
+
   function showAutotagTab() {
     if (autotagTabActive) return;
     if (settingsTabActive && !isMobilePlayer()) hideSettingsView();
@@ -6314,14 +6579,17 @@ render();
     autotagViewEl.style.display = 'flex';
     atStartPolling();
     ensureArchiveDb();
+    scoutLoad();
+    if (atSource === 'scout') scoutPoll();
     if (_dbCache) { renderAutotagView(); atLoad(); }
-    else { renderAutotagView(); archiveDbPromise().catch(() => {}).then(() => { if (autotagTabActive) atLoad(); }); }
+    else { renderAutotagView(); archiveDbPromise().catch(() => {}).then(() => { if (autotagTabActive) { atLoad(); if (atSource === 'scout') renderScoutView(); } }); }
   }
 
   function hideAutotagView() {
     if (!autotagTabActive) return;
     if (atSwipeCleanup) { atSwipeCleanup(); atSwipeCleanup = null; }
     autotagTabActive = false;
+    clearInterval(scoutTimer); scoutTimer = null;
     releaseGridPreviews(autotagViewEl);
     if (autotagViewEl) autotagViewEl.style.display = 'none';
     document.body.classList.remove('sp-autotag-open');
@@ -7643,6 +7911,24 @@ render();
       .at-modes { display: flex; gap: 6px; }
       .at-mode { background: rgba(255,255,255,.06); border: 1px solid #444; color: #999; border-radius: 12px; padding: 2px 10px; font-size: 12px; line-height: 18px; cursor: pointer; }
       .at-mode.on { color: #fff; background: rgba(255,255,255,.14); }
+      /* ── For You picks ── */
+      #scout-grid { flex: 1; overflow-y: auto; padding: 14px 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; align-content: start; grid-auto-rows: max-content; }
+      .scout-card { background: #181818; border: 1px solid #2c2c2c; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+      .scout-cover { position: relative; aspect-ratio: 9 / 14; background: #111; cursor: pointer; }
+      .scout-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .scout-cover.nocover img { visibility: hidden; }
+      .scout-cover.nocover::after { content: 'no cover'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #555; font-size: 12px; }
+      .scout-score { position: absolute; top: 6px; left: 6px; background: rgba(0,0,0,.68); color: #fff; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+      .scout-body { padding: 8px 10px 2px; display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+      .scout-author { font-weight: 600; font-size: 13px; color: #eee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .scout-desc { font-size: 12px; color: #9a9a9a; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .scout-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+      .scout-tag { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: rgba(79,195,247,.14); color: #9ed8f0; white-space: nowrap; }
+      .scout-actions { display: flex; align-items: center; gap: 6px; padding: 8px 10px 10px; margin-top: auto; }
+      .scout-btn { flex: 1; background: rgba(255,255,255,.07); border: 1px solid #444; color: #ddd; border-radius: 14px; padding: 5px 4px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+      .scout-btn.primary { background: #2c5d8f; border-color: #3d79b5; color: #fff; }
+      .scout-banner { padding: 8px 18px; font-size: 12px; color: #9a9a9a; border-bottom: 1px solid #2a2a2a; flex-shrink: 0; line-height: 1.45; }
+      .scout-banner.warn { background: rgba(255,193,7,.10); border-bottom-color: #5c4a10; color: #f1d27a; }
       #autotag-grid { flex: 1; overflow-y: auto; padding: 14px 18px; display: grid; grid-template-columns: repeat(auto-fill,minmax(150px,1fr)); gap: 14px; align-content: start; }
       /* phone swipe review */
       #at-swipe { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -7844,7 +8130,8 @@ render();
       @media (hover: none) { .thumb-tool { opacity: .9; } }
       @media (max-width: 768px) {
         #autotag-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 500; background: #0d0d0d; }
-        #autotag-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 8px; }
+        #autotag-grid, #scout-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 8px; }
+        .scout-banner { padding: 8px 10px; }
         #autotag-head { padding: 8px 10px; }
         #author-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 3500; background: #0d0d0d; }
         .author-view-close { display: none; }   /* swipe right (or the browser's back) closes the page */
