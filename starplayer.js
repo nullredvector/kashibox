@@ -6368,6 +6368,8 @@ render();
   // ═══════════════════════════════════════════════════════════════════════════
   let scoutData = null, scoutError = '', scoutBucket = 'pending', scoutShown = 60, scoutTimer = null, scoutSig = '';
   let scoutTabActive = false, scoutViewEl = null;
+  let scoutViewMode = 'cards', scoutStackLive = false, scoutSwipeCleanup = null;      // phones: swipe cards or the grid
+  try { if (localStorage.getItem('sp_scout_view') === 'grid') scoutViewMode = 'grid'; } catch (_) {}
 
   function scoutAgo(ms) {
     if (!ms) return '';
@@ -6489,7 +6491,11 @@ render();
       if (same) return;   // nothing new: leave the screen (and its scroll position) alone
     } catch (e) { scoutError = 'Could not read the picks (' + (e.message || e) + ').'; }
     scoutBadge();
-    if (scoutTabActive) renderScoutView();
+    if (scoutTabActive && scoutStackLive && scoutData) {          // a card is being swiped: only refresh the bar and the counts
+      const bar = scoutViewEl.querySelector('.scout-status');
+      if (bar) bar.replaceWith(buildScoutStatus(scoutData.status));
+      scoutCounts();
+    } else if (scoutTabActive) renderScoutView();
   }
 
   // keep the number on the tab fresh even while the tab is closed
@@ -6506,11 +6512,12 @@ render();
   }
 
   // decision: liked | skipped | opened | pending (undo). Shown at once, then saved; a failed save brings the old state back.
-  async function scoutDecide(id, decision) {
+  // quiet: the swipe cards are on screen, so do not rebuild the view under the finger (only the counts change)
+  async function scoutDecide(id, decision, quiet) {
     if (!scoutData) return;
     const dec = scoutData.decisions || (scoutData.decisions = {});
     if (decision === 'pending') delete dec[id]; else dec[id] = { d: decision, t: Date.now() };
-    renderScoutView();
+    if (quiet) { scoutBadge(); scoutCounts(); } else renderScoutView();
     try {
       const r = await fetch('/api/scout/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, decision }) });
       if (!r.ok) throw new Error('status ' + r.status);
@@ -6518,17 +6525,25 @@ render();
   }
 
   // Was a tag right (1) or wrong (-1)? Pressing the same answer again forgets it.
-  async function scoutTagVote(id, tag, value) {
+  async function scoutTagVote(id, tag, value, quiet) {
     if (!scoutData) return;
     const all = scoutData.tagFeedback || (scoutData.tagFeedback = {});
     const mine = all[id] || (all[id] = {});
     const v = mine[tag] === value ? 0 : value;
     if (v === 0) delete mine[tag]; else mine[tag] = v;
-    renderScoutView();
+    if (!quiet) renderScoutView();
     try {
       const r = await fetch('/api/scout/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, tag, value: v }) });
       if (!r.ok) throw new Error('status ' + r.status);
     } catch (e) { spToast('Could not save that (' + (e.message || e) + ')'); scoutSig = ''; scoutLoad(); }
+    return v;
+  }
+
+  // the numbers on the Pending / Liked / Skipped buttons, updated in place
+  function scoutCounts() {
+    if (!scoutViewEl || !scoutData) return;
+    const b = scoutBuckets(), labels = { pending: 'Pending', liked: 'Liked', skipped: 'Skipped' };
+    scoutViewEl.querySelectorAll('#scout-head .at-mode[data-bucket]').forEach(el => { el.textContent = labels[el.dataset.bucket] + ' ' + b[el.dataset.bucket].length.toLocaleString(); });
   }
 
   function buildScoutCard(c, bucket) {
@@ -6590,10 +6605,188 @@ render();
     return card;
   }
 
+  // Phones: the pending picks as swipe cards, like the tag review. Right = I liked it, left = skip, tap or the arrow = open on the site.
+  // Opening only marks the pick; it stays pending until you swipe. Nothing here likes anything on the site.
+  function buildScoutStack(list) {
+    const queue = list.slice();
+    const root = document.createElement('div');
+    root.id = 'scout-swipe';
+    const stack = document.createElement('div'); stack.className = 'at-sw-stack';
+    const count = document.createElement('div'); count.className = 'at-sw-count';
+    const toast = document.createElement('div'); toast.className = 'at-sw-toast';
+    const btns = document.createElement('div'); btns.className = 'at-sw-btns';
+    let cur = null, busy = false, undoItem = null, toastTimer = null;
+
+    const say = (text, undo) => {
+      clearTimeout(toastTimer);
+      toast.textContent = text;
+      if (undo) { const u = document.createElement('button'); u.textContent = 'Undo'; u.addEventListener('click', undo); toast.appendChild(u); }
+      toast.classList.add('on');
+      toastTimer = setTimeout(() => toast.classList.remove('on'), 4500);
+    };
+    const wasOpened = id => { const d = scoutData.decisions[id]; return !!d && d.d === 'opened'; };
+
+    function markOpened(card) {
+      if (card.querySelector('.scout-opened')) return;
+      const o = document.createElement('span'); o.className = 'scout-opened'; o.style.top = '40px'; o.textContent = 'Opened'; card.appendChild(o);
+    }
+
+    function openIt() {
+      if (!cur || !queue.length) return;
+      const item = queue[0], url = scoutVideoUrl(item);
+      if (!url) { say('Set the profile link in Settings to open videos from here'); return; }
+      window.open(url, '_blank', 'noopener');
+      if (!wasOpened(item.id)) scoutDecide(item.id, 'opened', true);
+      markOpened(cur);
+    }
+
+    function makeCard(item) {
+      const card = document.createElement('div');
+      card.className = 'at-sw-card'; card.dataset.id = item.id;
+      const img = document.createElement('img'); img.className = 'at-sw-img'; img.src = 'data/.appdata/' + item.cover; img.alt = '';
+      img.onerror = () => { img.style.display = 'none'; };
+      card.appendChild(img);
+      [['acc', 'LIKED'], ['rej', 'SKIP']].forEach(([c, t]) => {
+        const st = document.createElement('div'); st.className = 'at-sw-stamp ' + c; st.textContent = t; card.appendChild(st);
+      });
+      const meta = document.createElement('div'); meta.className = 'at-sw-info scout-sw-info';
+      const top = document.createElement('div');
+      const who = document.createElement('span'); who.className = 'at-sw-user'; who.style.pointerEvents = 'none'; who.textContent = item.author ? '@' + item.author : '(unknown)'; top.appendChild(who);
+      const sc = document.createElement('span'); sc.className = 'at-sw-score'; sc.textContent = Math.round(item.score * 100) + '%'; sc.title = 'How well this fits the tags you taught the AI tagger'; top.appendChild(sc);
+      meta.appendChild(top);
+      if (item.desc) { const cap = document.createElement('div'); cap.className = 'at-sw-cap'; cap.textContent = item.desc.length > 110 ? item.desc.slice(0, 110) + '…' : item.desc; meta.appendChild(cap); }
+      if (item.tags && item.tags.length) {
+        const tg = document.createElement('div'); tg.className = 'scout-tags scout-sw-tags';
+        const votes = (scoutData.tagFeedback && scoutData.tagFeedback[item.id]) || {};
+        item.tags.forEach(([name, sco]) => {
+          const t = document.createElement('span');
+          t.className = 'scout-tag' + (votes[name] === 1 ? ' right' : votes[name] === -1 ? ' wrong' : '');
+          const lab = document.createElement('span'); lab.textContent = groupDisplayName(name) + ' ' + Math.round(sco * 100) + '%'; t.appendChild(lab);
+          [[1, '✓', 'Yes, this video fits this tag'], [-1, '✗', 'No, this tag is wrong for this video']].forEach(([val, ch, tip]) => {
+            const b = document.createElement('button'); b.className = 'scout-vote'; b.textContent = ch; b.title = tip;
+            b.addEventListener('click', async e => {
+              e.stopPropagation();
+              const v = await scoutTagVote(item.id, name, val, true);
+              t.className = 'scout-tag' + (v === 1 ? ' right' : v === -1 ? ' wrong' : '');
+              t.querySelectorAll('.scout-vote').forEach((x, i) => x.classList.toggle('on', v === (i ? -1 : 1)));
+            });
+            t.appendChild(b);
+          });
+          tg.appendChild(t);
+        });
+        meta.appendChild(tg);
+      }
+      card.appendChild(meta);
+      if (wasOpened(item.id)) markOpened(card);
+      return card;
+    }
+
+    function stamps(card, dx, thr) {
+      const o = x => String(Math.max(0, Math.min(1, x)));
+      card.querySelector('.acc').style.opacity = o(dx / thr);
+      card.querySelector('.rej').style.opacity = o(-dx / thr);
+    }
+
+    function fly(decision) {
+      if (busy || !cur || !queue.length) return;
+      busy = true;
+      const W = root.clientWidth || 360, card = cur;
+      card.style.transition = 'transform .24s ease-out, opacity .24s';
+      card.style.transform = decision === 'liked' ? `translate(${W * 1.3}px, -40px) rotate(18deg)` : `translate(${-W * 1.3}px, -40px) rotate(-18deg)`;
+      card.style.opacity = '0';
+      stamps(card, decision === 'liked' ? 1 : -1, 1);
+      setTimeout(() => advance(decision), 230);
+    }
+
+    function advance(decision) {
+      const item = queue.shift();
+      cur = null;
+      undoItem = item;
+      scoutDecide(item.id, decision, true);
+      say(decision === 'liked' ? 'Marked as liked' : 'Skipped', () => {
+        if (!undoItem || busy) return;
+        const it = undoItem; undoItem = null;
+        scoutDecide(it.id, 'pending', true);
+        queue.unshift(it); toast.classList.remove('on'); mount();
+      });
+      busy = false;
+      mount();
+    }
+
+    function attachGestures(card) {
+      let sx = 0, sy = 0, st = 0, dx = 0, dy = 0, dragging = false, moved = false;
+      const W = () => root.clientWidth || 360;
+      card.addEventListener('pointerdown', e => {
+        if (busy || e.target.closest('button, a')) return;
+        dragging = true; moved = false; dx = dy = 0; sx = e.clientX; sy = e.clientY; st = Date.now();
+        try { card.setPointerCapture(e.pointerId); } catch (_) {}
+        card.style.transition = 'none';
+      });
+      card.addEventListener('pointermove', e => {
+        if (!dragging) return;
+        dx = e.clientX - sx; dy = e.clientY - sy;
+        if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved = true;
+        card.style.transform = `translate(${dx}px, ${dy * 0.3}px) rotate(${dx / 18}deg)`;
+        stamps(card, dx, Math.max(90, W() * 0.28));
+      });
+      const end = () => {
+        if (!dragging) return;
+        dragging = false;
+        const dt = Math.max(1, Date.now() - st), vx = dx / dt, thrX = Math.max(90, W() * 0.28);
+        const decision = (dx > thrX || (dx > 50 && vx > 0.6)) ? 'liked' : (dx < -thrX || (dx < -50 && vx < -0.6)) ? 'skipped' : null;
+        if (decision) { fly(decision); return; }
+        card.style.transition = 'transform .2s ease-out';
+        card.style.transform = '';
+        stamps(card, 0, 1);
+        if (!moved && dt < 300) openIt();                          // a tap opens the video on the site
+      };
+      card.addEventListener('pointerup', end);
+      card.addEventListener('pointercancel', end);
+    }
+
+    function mount() {
+      stack.textContent = '';
+      cur = null;
+      count.textContent = queue.length ? queue.length.toLocaleString() + ' left' : '';
+      if (!queue.length) {
+        const d = document.createElement('div'); d.className = 'at-sw-done';
+        d.textContent = 'All picks reviewed. New ones show up here as the scout finds them.';
+        stack.appendChild(d); btns.style.display = 'none';
+        return;
+      }
+      btns.style.display = '';
+      if (queue[1]) stack.appendChild(makeCard(queue[1])).classList.add('behind');
+      cur = makeCard(queue[0]);
+      stack.appendChild(cur);
+      attachGestures(cur);
+    }
+
+    [['skipped', '✕', 'reject', 'Skip: not for me'], ['open', '↗', 'open', 'Open this video on the site (it stays pending)'], ['liked', '✓', 'accept', 'I liked it']].forEach(([d, t, c, title]) => {
+      const b = document.createElement('button');
+      b.className = 'at-sw-btn ' + c; b.textContent = t; b.title = title;
+      b.addEventListener('click', e => { e.stopPropagation(); if (d === 'open') openIt(); else fly(d); });
+      btns.appendChild(b);
+    });
+    root.append(stack, count, btns, toast);
+    mount();
+
+    const onKey = e => {
+      if (!root.isConnected || !scoutTabActive || e.target.closest('input, select, textarea')) return;
+      if (e.key === 'ArrowRight') fly('liked'); else if (e.key === 'ArrowLeft') fly('skipped'); else if (e.key === 'ArrowUp') openIt();
+      else return;
+      e.preventDefault();
+    };
+    document.addEventListener('keydown', onKey);
+    scoutSwipeCleanup = () => document.removeEventListener('keydown', onKey);
+    return root;
+  }
+
   function renderScoutView() {
     if (!scoutViewEl) return;
     const prev = scoutViewEl.querySelector('#scout-grid');
     const keepScroll = prev ? prev.scrollTop : 0;
+    if (scoutSwipeCleanup) { scoutSwipeCleanup(); scoutSwipeCleanup = null; }
+    scoutStackLive = false;
     scoutViewEl.innerHTML = '';
     const head = document.createElement('div');
     head.id = 'scout-head';
@@ -6605,13 +6798,17 @@ render();
     ['pending', 'liked', 'skipped'].forEach(m => {
       const el = document.createElement('button');
       el.className = 'at-mode' + (scoutBucket === m ? ' on' : '');
+      el.dataset.bucket = m;
       el.textContent = labels[m] + (scoutData ? ' ' + b[m].length.toLocaleString() : '');
       el.addEventListener('click', () => { scoutBucket = m; scoutShown = 60; renderScoutView(); });
       modes.appendChild(el);
     });
     const refresh = document.createElement('button');
     refresh.className = 'at-mode'; refresh.textContent = 'Refresh'; refresh.addEventListener('click', () => { scoutSig = ''; scoutLoad(); });
-    row1.append(title, modes, refresh);
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'at-mode'; viewBtn.textContent = scoutViewMode === 'cards' ? 'Grid' : 'Cards'; viewBtn.title = 'Switch between swipe cards and the grid';
+    viewBtn.addEventListener('click', () => { scoutViewMode = scoutViewMode === 'cards' ? 'grid' : 'cards'; try { localStorage.setItem('sp_scout_view', scoutViewMode); } catch (_) {} renderScoutView(); });
+    row1.append(title, modes, ...(isMobilePlayer() && scoutBucket === 'pending' ? [viewBtn] : []), refresh);
     head.appendChild(row1);
 
     const grid = document.createElement('div');
@@ -6623,7 +6820,11 @@ render();
     else if (!scoutData) msg('Loading…');
     else if (!scoutData.available) msg(settings.scoutEnabled ? 'The scout is on but has not suggested anything yet. It starts at its next check.' : 'No picks yet. Turn on the For You scout in Settings.');
     else if (!b[scoutBucket].length) msg(scoutBucket === 'pending' ? 'Nothing waiting. New picks show up here as the scout finds them.' : 'Nothing here yet.');
-    else {
+    else if (isMobilePlayer() && scoutBucket === 'pending' && scoutViewMode === 'cards') {
+      scoutStackLive = true;
+      scoutViewEl.append(head, ...(banner ? [banner] : []), buildScoutStack(b.pending));
+      return;
+    } else {
       b[scoutBucket].slice(0, scoutShown).forEach(c => grid.appendChild(buildScoutCard(c, scoutBucket)));
       if (b[scoutBucket].length > scoutShown) {
         const more = document.createElement('button');
@@ -8089,7 +8290,7 @@ render();
       @keyframes scoutPulse { 70% { box-shadow: 0 0 0 7px rgba(76,175,80,0); } 100% { box-shadow: 0 0 0 0 rgba(76,175,80,0); } }
       #autotag-grid { flex: 1; overflow-y: auto; padding: 14px 18px; display: grid; grid-template-columns: repeat(auto-fill,minmax(150px,1fr)); gap: 14px; align-content: start; }
       /* phone swipe review */
-      #at-swipe { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; }
+      #at-swipe, #scout-swipe { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; }
       .at-sw-stack { position: absolute; inset: 0; }
       .at-sw-card { position: absolute; inset: 0; background: #111; will-change: transform; touch-action: none; }
       .at-sw-card.behind { transform: scale(.96); opacity: .7; pointer-events: none; }
@@ -8117,6 +8318,9 @@ render();
       .sp-rail-btn.braces-on, .sp-rail-btn.rail-tag.active { color: #4fc3f7; }
       .at-sw-btns { position: absolute; left: 0; right: 0; bottom: 18px; z-index: 6; display: flex; justify-content: center; align-items: center; gap: 22px; pointer-events: none; }
       .at-sw-btn { pointer-events: auto; width: 62px; height: 62px; border-radius: 50%; border: 2px solid; background: rgba(0,0,0,.55); font-size: 28px; line-height: 1; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+      .at-sw-btn.open { width: 48px; height: 48px; font-size: 22px; color: #4fc3f7; border-color: #4fc3f7; }
+      .scout-sw-info { padding-right: 16px; }
+      .scout-sw-tags { margin-top: 8px; pointer-events: auto; }
       .at-sw-btn.reject { color: #f44336; border-color: #f44336; } .at-sw-btn.accept { color: #4caf50; border-color: #4caf50; }
       .at-sw-btn.unsure { width: 48px; height: 48px; font-size: 22px; color: #ffc107; border-color: #ffc107; }
       .at-sw-toast { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 7; background: rgba(30,30,30,.92); color: #eee; border-radius: 16px; padding: 6px 14px; font-size: 13px; display: none; white-space: nowrap; align-items: center; gap: 10px; }
@@ -8291,6 +8495,7 @@ render();
         #autotag-grid, #scout-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 8px; }
         .scout-status { padding: 8px 10px; }
         #autotag-head, #scout-head { padding: 8px 10px; }
+        #scout-head .stars-main-title { display: none; }      /* the tab bar already says it; leaves room for Grid and Refresh */
         #author-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 3500; background: #0d0d0d; }
         .author-view-close { display: none; }   /* swipe right (or the browser's back) closes the page */
         /* the controls (play, size, sort buttons) get their own row under the title */
