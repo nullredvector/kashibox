@@ -46,7 +46,7 @@ The cover image must exist at `scout/covers/<id>.jpg` (kashibox builds that path
 
 ### `scout/status.json`, written by the scout (atomic write: temp file, then rename)
 ```json
-{ "state": "idle", "updated": 1790000000000, "message": "", "today": { "date": "2026-10-24", "viewed": 96, "collected": 24 } }
+{ "state": "idle", "updated": 1790000000000, "message": "", "next": 1790000300000, "today": { "date": "2026-10-24", "viewed": 96, "collected": 24 } }
 ```
 `state` is one of `off`, `idle`, `running`, `paused`, `challenge`, `login`, `error`. `challenge` and `login` show a warning in kashibox. `message` is shown for `error`. Update it at least when the state changes and every few minutes while running.
 

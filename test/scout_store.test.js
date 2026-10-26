@@ -99,3 +99,10 @@ test('tag answers: only tags the scorer named, right/wrong/forget, kept beside t
   assert.equal(scout.loadScout().tagFeedback[id], undefined);
   scout.recordDecision(id, 'pending');
 });
+
+test('status: next (when it looks again) is kept when it is a number, else 0', () => {
+  write('status.json', JSON.stringify({ state: 'idle', updated: 5, message: 'Resting between sessions.', next: 1790000300000, today: {} }));
+  assert.equal(scout.loadStatus().next, 1790000300000);
+  write('status.json', JSON.stringify({ state: 'running', updated: 5, next: 'soon' }));
+  assert.equal(scout.loadStatus().next, 0);
+});
