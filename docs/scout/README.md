@@ -1,11 +1,11 @@
 # For You picks: how the three programs fit together
 
-A **suggestion queue**. A scout on the server looks through the site's For You feed, a scorer judges each video by the tags you taught the AI tagger, and kashibox shows the best ones in **Review -> For You picks**. You open a video and like it yourself (or skip it). **Nothing in this system ever likes, follows, comments on or posts anything.**
+A **suggestion queue**. A scout on the server looks through the site's For You feed, a scorer judges each video by the tags you taught the AI tagger, and kashibox shows the best ones in **the For You tab**. You open a video and like it yourself (or skip it). **Nothing in this system ever likes, follows, comments on or posts anything.**
 
 ```
  ttpull container                 autotagTT container                kashibox
  ┌──────────────────┐  cover.jpg  ┌────────────────────┐             ┌──────────────────────────┐
- │ scout            │ ──────────► │ scorer (HTTP)      │             │ Review -> For You picks  │
+ │ scout            │ ──────────► │ scorer (HTTP)      │             │ For You tab              │
  │  reads the feed, │ ◄────────── │  POST /score       │             │  cards: Open / I liked   │
  │  read-only       │ score,tags  └────────────────────┘             │  it / Skip               │
  └────────┬─────────┘                       ▲                         └───────────┬──────────────┘
@@ -84,7 +84,7 @@ Response: `{"score": 0.83, "tags": [["tagname", 0.91], ["tagname2", 0.74]], "mod
 2. **Train once in autotagTT** (Review -> `Run...` -> train). The scorer has no models until a training run has finished after the update, and until then it scores everything 0, so the scout would suggest nothing.
 3. Check that ttpull can reach the scorer: `GET /health` on `http://autotagtt:8090` should say `ready: true` with at least one tag.
 4. Try it dry: in the ttpull container's environment set `SCOUT=on` and `SCOUT_DRY=1`, switch **Settings -> For You scout** on in kashibox, and read the `[scout]` lines in ttpull's log. It logs what it would suggest and writes nothing.
-5. When that looks right, remove `SCOUT_DRY` (keep `SCOUT=on`). Picks start to appear in Review -> For You picks.
+5. When that looks right, remove `SCOUT_DRY` (keep `SCOUT=on`). Picks start to appear in the For You tab.
 6. Turn it off at any time with the Settings switch (within a minute) or `SCOUT=off`. After any stop (verification screen, login prompt, error) it stays stopped for 6 hours, or until you switch it off and on again.
 
 ## Try the kashibox side without the other two
@@ -92,4 +92,4 @@ Response: `{"score": 0.83, "tags": [["tagname", 0.91], ["tagname2", 0.74]], "mod
 node tools/fake_scout.js /path/to/a/test/archive 24 idle      # invented picks, plain generated covers
 ARCHIVE_DIR=/path/to/a/test/archive PORT=9560 node server.js
 ```
-Then open Review -> For You picks. The last argument can be `challenge`, `login`, `error`, `paused`, `running` or `off` to see the banners.
+Then open the For You tab. The last argument can be `challenge`, `login`, `error`, `paused`, `running` or `off` to see the banners.

@@ -3,7 +3,7 @@
 You are working in the **ttpull** repository. Read [README.md](README.md) (the shared contract) first; this brief is your half of it. kashibox (the viewer) is finished: the queue screen, the Settings controls and the decision storage already exist and are tested with a fake scout.
 
 ## What to build
-A **scout** that runs inside the ttpull container, using the Chromium and the saved login that ttpull already has. At a human pace, within limits the user sets, it looks through the site's For You feed, sends each video's cover to the scorer, and writes the best matches to the shared archive folder as **suggestions**. The user then opens and likes them by hand in kashibox's Review -> For You picks.
+A **scout** that runs inside the ttpull container, using the Chromium and the saved login that ttpull already has. At a human pace, within limits the user sets, it looks through the site's For You feed, sends each video's cover to the scorer, and writes the best matches to the shared archive folder as **suggestions**. The user then opens and likes them by hand in kashibox's the For You tab.
 
 **The scout is strictly read-only on the site. It never likes, unlikes, follows, comments, shares, saves or posts. There is no auto-like mode. Do not add one, not even behind a flag.**
 
