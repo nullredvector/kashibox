@@ -79,6 +79,14 @@ Response: `{"score": 0.83, "tags": [["tagname", 0.91], ["tagname2", 0.74]], "mod
 3. **Privacy.** Covers, scores and decisions stay on the server, in the archive folder. Nothing is sent to any cloud or API. Never commit archive content, covers or decisions to a repository.
 4. **The user decides.** There is no auto-like mode, and none should be added without the user asking for it again.
 
+## Turning it on (in this order)
+1. Deploy kashibox (this repo), then autotagTT, then ttpull. Each new version does nothing different until the next steps; the scout is off by default.
+2. **Train once in autotagTT** (Review -> `Run...` -> train). The scorer has no models until a training run has finished after the update, and until then it scores everything 0, so the scout would suggest nothing.
+3. Check that ttpull can reach the scorer: `GET /health` on `http://autotagtt:8090` should say `ready: true` with at least one tag.
+4. Try it dry: in the ttpull container's environment set `SCOUT=on` and `SCOUT_DRY=1`, switch **Settings -> For You scout** on in kashibox, and read the `[scout]` lines in ttpull's log. It logs what it would suggest and writes nothing.
+5. When that looks right, remove `SCOUT_DRY` (keep `SCOUT=on`). Picks start to appear in Review -> For You picks.
+6. Turn it off at any time with the Settings switch (within a minute) or `SCOUT=off`. After any stop (verification screen, login prompt, error) it stays stopped for 6 hours, or until you switch it off and on again.
+
 ## Try the kashibox side without the other two
 ```bash
 node tools/fake_scout.js /path/to/a/test/archive 24 idle      # invented picks, plain generated covers
