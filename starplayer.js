@@ -6375,6 +6375,14 @@ render();
     return m < 1 ? 'just now' : m < 90 ? m + ' min ago' : Math.round(m / 60) + ' h ago';
   }
 
+  // " Next session in 6 min." / " Tries again in 52 min." (nothing when it did not say, or the time has passed)
+  function scoutNextText(st) {
+    if (!st || !st.next || st.next <= Date.now()) return '';
+    const m = Math.max(1, Math.round((st.next - Date.now()) / 60000));
+    const when = m < 90 ? m + ' min' : Math.round(m / 60) + ' h';
+    return (st.state === 'idle' ? ' Next session in about ' : ' Tries again in about ') + when + '.';
+  }
+
   // One line for the status bar: { tone: ok | rest | warn | bad | off, label, text }
   function scoutStatusInfo(st) {
     const on = !!settings.scoutEnabled;
@@ -6387,12 +6395,12 @@ render();
       case 'running':
         if (stale) return { tone: 'warn', label: 'Not responding', text: 'It said it was looking through the feed, but has not reported for ' + scoutAgo(st.updated).replace(' ago', '') + '. It may be down.' };
         return { tone: 'ok', label: 'Running', text: 'Looking through the feed now.' };
-      case 'idle': return { tone: 'rest', label: 'Resting', text: st.message || 'Between sessions. It looks again after a short break.' };
-      case 'paused': return { tone: 'warn', label: 'Paused', text: st.message || 'Outside your hours, or today’s limit is reached.' };
+      case 'idle': return { tone: 'rest', label: 'Resting', text: (st.message || 'Between sessions.') + scoutNextText(st) };
+      case 'paused': return { tone: 'warn', label: 'Paused', text: (st.message || 'Outside your hours, or today’s limit is reached.') + scoutNextText(st) };
       case 'off': return { tone: 'off', label: 'Off', text: on ? 'Switching on… it starts at its next check.' : 'The scout is switched off. Turn it on in Settings.' };
       case 'challenge': return { tone: 'bad', label: 'Stopped', text: 'The site asked it to verify. Finish the check in your own browser; it carries on by itself.' };
       case 'login': return { tone: 'bad', label: 'Needs login', text: 'The site logged the scout out. Push your session again from the ttpull extension.' };
-      case 'error': return { tone: 'bad', label: 'Stopped', text: st.message || 'Stopped by an error.' };
+      case 'error': return { tone: 'bad', label: 'Stopped', text: (st.message || 'Stopped by an error.') + scoutNextText(st) };
     }
     return { tone: 'rest', label: st.state || 'Unknown', text: st.message || '' };
   }
@@ -6492,7 +6500,8 @@ render();
     scoutTimer = setInterval(() => {
       if (!scoutTabActive) { clearInterval(scoutTimer); scoutTimer = null; return; }
       scoutLoad();
-      document.querySelectorAll('.scout-age').forEach(a => { a.textContent = 'updated ' + scoutAgo(Number(a.dataset.t)); });
+      const bar = document.querySelector('#scout-view .scout-status');      // keep the ages and countdown fresh between reloads
+      if (bar && scoutData) bar.replaceWith(buildScoutStatus(scoutData.status));
     }, 60000);
   }
 

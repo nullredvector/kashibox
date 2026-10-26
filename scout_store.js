@@ -112,6 +112,7 @@ function loadStatus() {
       state: STATES.includes(s.state) ? s.state : 'idle',
       updated: Number(s.updated) || 0,
       message: str(s.message, 200),
+      next: Number(s.next) > 0 ? Number(s.next) : 0,        // optional: when it will look again (after a rest or a stop)
       today: { date: str(today.date, 12), viewed: Number(today.viewed) || 0, collected: Number(today.collected) || 0 },
     };
   } catch (_) { return null; }
