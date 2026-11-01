@@ -4773,10 +4773,12 @@
       }
     }
 
+    const MID_ASPECT = 0.62;   // 9:16 is 0.5625; wider than this is centred, narrower stays at the top
     function makeSlide(item, idx) {
       const slide = document.createElement('div');
       slide.className = 'player-slide';
       slide.dataset.idx = idx;
+      if (item.library) slide.classList.add('sp-mid');   // library clips are mostly wide: centred from the first frame, so nothing moves once the size is known
 
       // Video — preload=none so only the playing one downloads
       const video = document.createElement('video');
@@ -4799,7 +4801,7 @@
         if (!w || !h || !fw || !fh) return;
         const a = fw / w, b = fh / h;
         slide.classList.toggle('sp-fill', Math.max(a, b) / Math.min(a, b) <= 1.25);
-        slide.classList.toggle('sp-wide', w / h > 1.05);   // landscape clips sit in the middle of the screen, not pinned to the top
+        slide.classList.toggle('sp-mid', w / h > MID_ASPECT);   // anything that is not clearly vertical sits in the middle of the screen, not pinned to the top
       };
       cover.addEventListener('load', () => fit(cover.naturalWidth, cover.naturalHeight));
       video.addEventListener('loadedmetadata', () => fit(video.videoWidth, video.videoHeight));
@@ -9461,7 +9463,7 @@ render();
         #player-feed { background: #000; }
         /* never crop or stretch: the video keeps its own aspect ratio, pinned to the very top of the screen */
         #player-view .player-video, #player-view .player-cover { object-fit: contain; object-position: center top; }
-        #player-view .player-slide.sp-wide .player-video, #player-view .player-slide.sp-wide .player-cover { object-position: center center; }
+        #player-view .player-slide.sp-mid .player-video, #player-view .player-slide.sp-mid .player-cover { object-position: center center; }
         .player-cover { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; transition: opacity .12s; }
         .player-cover.gone { opacity: 0; }
         .player-slide.sp-paused::before {
