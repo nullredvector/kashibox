@@ -5342,6 +5342,7 @@ function showGrpPicker(btn,id){
 
 // Keep the window shaped like the video that is playing: the width stays, the height follows the video's aspect ratio
 // (a very tall or wide video is limited to what the screen allows, narrowing the other side instead)
+let fitPending=false;
 function fitWin(){
   const vw=v.videoWidth, vh=v.videoHeight; if(!vw||!vh) return;
   try{
@@ -5350,9 +5351,14 @@ function fitWin(){
     let w=window.innerWidth, h=Math.round(w*vh/vw);
     if(h>maxH){h=maxH; w=Math.round(h*vw/vh);}
     if(w>maxW){w=maxW; h=Math.round(w*vh/vw);}
-    if(Math.abs(w-window.innerWidth)>2||Math.abs(h-window.innerHeight)>2) window.resizeTo(w+fw,h+fh);
+    if(Math.abs(w-window.innerWidth)<=2&&Math.abs(h-window.innerHeight)<=2){fitPending=false;return;}
+    window.resizeTo(w+fw,h+fh);
+    // a Picture-in-Picture window only obeys a resize made right after a click or key press: try again on the next one
+    setTimeout(()=>{fitPending=Math.abs(window.innerWidth-w)>2||Math.abs(window.innerHeight-h)>2;},300);
   }catch(_){}
 }
+function fitOnGesture(){ if(fitPending){fitPending=false;fitWin();} }
+['pointerdown','keydown','touchend'].forEach(ev=>window.addEventListener(ev,fitOnGesture,true));
 let fitTimer=null;
 window.addEventListener('resize',()=>{clearTimeout(fitTimer);fitTimer=setTimeout(fitWin,250);});
 
