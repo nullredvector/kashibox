@@ -69,39 +69,43 @@ function browse(p) {
   return { root: ROOT, path: dir, parent: dir === ROOT ? null : path.dirname(dir), dirs, videos };
 }
 
-// Every video below a source folder (limited depth and count). Asynchronous, so a big folder never blocks the server;
-// a file is trusted by its place in the walk (links to folders are not followed), only a linked file is resolved.
-async function walk(dir) {
-  const out = [];
+// Every video below a source folder (limited depth and count). Asynchronous, so a big folder never blocks the server.
+// A regular file is trusted by its place in the walk (links to folders are not followed); only a linked file is resolved.
+// progress(n) is told how many videos have been found so far.
+async function walk(dir, progress) {
+  const found = [];
   const seen = new Set();
-  const pending = [];
   const go = async (d, depth) => {
-    if (out.length >= MAX_FILES || depth > MAX_DEPTH || seen.has(d)) return;
+    if (found.length >= MAX_FILES || depth > MAX_DEPTH || seen.has(d)) return;
     seen.add(d);
     let entries = [];
     try { entries = await fs.promises.readdir(d, { withFileTypes: true }); } catch (e) { if (depth === 0) throw e; return; }
     for (const e of entries) {
-      if (e.name.startsWith('.') || out.length >= MAX_FILES) continue;
+      if (e.name.startsWith('.') || found.length >= MAX_FILES) continue;
       const full = path.join(d, e.name);
       if (e.isDirectory()) { await go(full, depth + 1); continue; }
       if (!VIDEO_EXT.test(e.name) || !(e.isFile() || e.isSymbolicLink())) continue;
-      pending.push(full);
-      out.push(null);
+      found.push({ full, link: e.isSymbolicLink() });
+      if (progress && found.length % 500 === 0) progress(found.length);
     }
   };
   await go(dir, 0);
-  out.length = 0;
-  // sizes, a few hundred at a time
-  for (let i = 0; i < pending.length; i += 200) {
-    await Promise.all(pending.slice(i, i + 200).map(async full => {
+  if (progress) progress(found.length);
+  // sizes, many at a time
+  const out = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < found.length) {
+      const f = found[next++];
       try {
-        const r = await fs.promises.realpath(full);
-        if (PSEUDO.some(x => within(r, x))) return;
-        const st = await fs.promises.stat(r);
-        if (st.isFile()) out.push({ path: r, rel: path.relative(dir, full), size: st.size });
+        let p = f.full;
+        if (f.link) { p = await fs.promises.realpath(f.full); if (PSEUDO.some(x => within(p, x))) continue; }
+        const st = await fs.promises.stat(p);
+        if (st.isFile()) out.push({ path: p, rel: path.relative(dir, f.full), size: st.size });
       } catch (_) {}
-    }));
-  }
+    }
+  };
+  await Promise.all(Array.from({ length: 48 }, worker));
   return out;
 }
 
@@ -110,7 +114,7 @@ function sourceDirs() { return load().dirs.filter(d => safe(d)); }
 // ── The index: what a source folder held when it was last scanned, kept in the appdata folder ──
 // Choosing a folder reads this instead of walking the disk; "Update index" (refresh) scans again on demand.
 const INDEX_FILE = path.join(APPDATA, 'library-index.json');
-const scanning = new Map();   // folder -> Promise (a scan in progress is shared)
+const scanning = new Map();   // folder -> { found, error } while a scan is running
 function loadIndex() { try { const d = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); return d && typeof d === 'object' ? d : {}; } catch (_) { return {}; } }
 function saveIndex(d) {
   fs.mkdirSync(APPDATA, { recursive: true });
@@ -119,27 +123,33 @@ function saveIndex(d) {
   fs.renameSync(tmp, INDEX_FILE);
 }
 
-function scan(d) {
-  if (scanning.has(d)) return scanning.get(d);
-  const p = walk(d).then(files => {
+// Scans in the background (the caller polls listFiles); a failure is kept for the next poll to report, as a code only
+const scanErrors = new Map();
+function startScan(d) {
+  if (scanning.has(d)) return;
+  const st = { found: 0 };
+  scanning.set(d, st);
+  scanErrors.delete(d);
+  walk(d, n => { st.found = n; }).then(files => {
     // only a file reached through a link keeps its own resolved path
-    const entry = { at: Date.now(), files: files.map(f => (f.path === path.join(d, f.rel) ? { r: f.rel, s: f.size } : { r: f.rel, s: f.size, p: f.path })) };
     const idx = loadIndex();
-    idx[d] = entry;
+    idx[d] = { at: Date.now(), files: files.map(f => (f.path === path.join(d, f.rel) ? { r: f.rel, s: f.size } : { r: f.rel, s: f.size, p: f.path })) };
     saveIndex(idx);
-    return entry;
-  }).finally(() => scanning.delete(d));
-  scanning.set(d, p);
-  return p;
+  }).catch(e => { scanErrors.set(d, (e && e.code) || 'UNKNOWN'); }).finally(() => scanning.delete(d));
 }
 
-// -> { files, indexedAt } | { error: <system error code> }   (codes only; never a name)
-// The index is scanned the first time a folder is used, or when refresh is true.
+// -> { files, indexedAt } | { scanning: true, found } | { error: <system error code> }   (codes only; never a name)
+// The first time a folder is used, or when refresh is true, a scan starts and this answers { scanning } until it is done.
 async function listFiles(dir, refresh) {
   const d = safe(dir);
   if (!d || !load().dirs.includes(d)) return { error: 'NOT_A_LIBRARY_FOLDER' };
+  if (scanning.has(d)) return { scanning: true, found: scanning.get(d).found };
   let entry = refresh ? null : loadIndex()[d];
-  if (!entry) { try { entry = await scan(d); } catch (e) { return { error: (e && e.code) || 'UNKNOWN' }; } }
+  if (!entry) {
+    if (!refresh && scanErrors.has(d)) { const error = scanErrors.get(d); scanErrors.delete(d); return { error }; }
+    startScan(d);
+    return { scanning: true, found: 0 };
+  }
   const inLib = new Set(Object.values(load().items).map(x => x.path));
   return { indexedAt: entry.at, files: entry.files.map(f => { const p = f.p || path.join(d, f.r); return { path: p, rel: f.r, size: f.s, added: inLib.has(p) }; }) };
 }

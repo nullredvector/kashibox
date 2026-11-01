@@ -792,6 +792,7 @@ http.createServer((req, res) => {
     if (pathname === '/api/library/files' && req.method === 'GET') {
       library.listFiles(String(q.dir || ''), q.refresh === '1').then(r => {
         if (r.error) return sendJson(404, { error: r.error });
+        if (r.scanning) return sendJson(202, { scanning: true, found: r.found });
         sendJson(200, { files: r.files, indexedAt: r.indexedAt });
       }).catch(() => sendJson(500, { error: 'UNKNOWN' }));
       return;
