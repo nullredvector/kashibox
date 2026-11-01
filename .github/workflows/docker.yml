@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - '**'
+  workflow_dispatch:   # lets a build be started by hand (Actions -> Run workflow), e.g. when a merge was not built
 
 jobs:
   build:

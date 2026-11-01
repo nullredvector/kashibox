@@ -472,6 +472,7 @@
           _dbCache = d;
           if (starsTabActive) renderStarsView();
           if (autotagTabActive) renderAutotagView();
+          if (scoutTabActive) renderScoutView();
           return d;
         })
         .catch(e => { _dbFailed = true; console.warn('[starplayer] archive db load failed', e); throw e; })
@@ -681,7 +682,7 @@
         authorName = authorName || info.authorName;
         desc       = desc       || info.desc;
       }
-      stars[videoId] = { id: videoId, coverSrc, authorName: authorName || '', desc: desc || '' };
+      stars[videoId] = { id: videoId, coverSrc, authorName: authorName || '', desc: desc || '', added: Date.now() };
     }
     saveStars();
     afterStarChange();
@@ -999,7 +1000,7 @@
   }
 
   // ── Sort order for the stars, username and review grids ──────────────────
-  // Latest/Oldest use the video's post date, Popular its like count. The review page also offers
+  // Latest/Oldest use the video's post date, Popular its like count; the Stars grid also offers Newest (when it was starred). The review page also offers
   // "Best match", which keeps the order the model ranked its suggestions in.
   // The Stars grid in AI mode has its own remembered sort (default: best match)
   function sortPage(page) { return page === 'stars' && labelMode === 'ai' ? 'stars-ai' : page; }
@@ -1007,6 +1008,7 @@
   function sortOptions(page) {
     page = sortPage(page);
     const opts = [['latest', 'Latest'], ['popular', 'Popular'], ['oldest', 'Oldest']];
+    if (page === 'stars') return [['newest', 'Newest'], ...opts];   // Newest = the most recently starred first
     if (page === 'likes' || page === 'favs') return [['recent', 'Added'], ...opts];
     return page === 'autotag' || page === 'stars-ai' ? [['score', 'Best match'], ...opts] : opts;
   }
@@ -1030,6 +1032,14 @@
   function sortVideos(items, page) {
     const mode = getSort(page);
     const d = _dbCache;
+    if (mode === 'newest') {
+      // Most recently starred first. A star remembers when it was added; older stars have no date, so they follow in the
+      // order they were saved (later = newer), and videos that are not stars at all come last.
+      const pos = new Map(); let n = 0;
+      for (const id in stars) pos.set(id, n++);
+      const rank = it => { const st = stars[it.id]; return !st ? -1 : typeof st.added === 'number' ? 1e13 + st.added : pos.get(String(it.id)); };
+      return items.map((item, i) => ({ item, i, r: rank(item) })).sort((a, b) => (b.r - a.r) || (a.i - b.i)).map(k => k.item);
+    }
     if (mode === 'score' || mode === 'recent' || !d) return items;
     const keyed = items.map((item, i) => {
       const v = d.videos[item.id];
@@ -1327,7 +1337,7 @@
     if (settingsTabActive) hideSettingsView();
     // Already showing this page (e.g. coming back from a video): leave the scroll position alone
     if (listTabKind === kind && listViewEl && listViewEl.style.display !== 'none') { syncNavActive(); return; }
-    if (autotagTabActive) hideAutotagView();
+    if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
     if (logTabActive) hideLogView();
     if (activeAuthorId) hideAuthorView(false);
     if (starsTabActive) {
@@ -1376,8 +1386,8 @@
     const sel = activeAuthorId ? null
       : settingsTabActive ? '.settings-tab'
       : listTabKind ? ({ likes: '.likes', bookmarked: '.bookmarked', following: '.following', library: '.library-tab' })[listTabKind]
-      : starsTabActive ? '.stars-tab' : logTabActive ? '.log-tab' : autotagTabActive ? '.autotag-tab' : null;
-    ['.likes', '.bookmarked', '.following', '.library-tab', '.stars-tab', '.log-tab', '.autotag-tab', '.settings-tab'].forEach(x => {
+      : starsTabActive ? '.stars-tab' : logTabActive ? '.log-tab' : autotagTabActive ? '.autotag-tab' : scoutTabActive ? '.scout-tab' : null;
+    ['.likes', '.bookmarked', '.following', '.library-tab', '.stars-tab', '.log-tab', '.autotag-tab', '.scout-tab', '.settings-tab'].forEach(x => {
       nav.querySelector(x)?.classList.toggle('active', x === sel);
     });
   }
@@ -1731,7 +1741,7 @@
 
   const GEAR_PATH = '<path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>';
   const SETTINGS_KEY = 'sp_settings';
-  let settings = { profileUrl: '', debugBanner: false, numericName: '', numericMin: 10, numericMax: 23 };
+  let settings = { profileUrl: '', debugBanner: false, numericName: '', numericMin: 10, numericMax: 23, scoutEnabled: false, scoutDaily: 100, scoutMin: 60, scoutFrom: 0, scoutTo: 23 };
   // The one-per-video number (10–23) is called "numeric tags" unless the user renames it in Settings
   const NUM_EMPTY = '#';
   const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1789,7 +1799,7 @@
     if (settingsTabActive && settingsViewEl && settingsViewEl.style.display !== 'none') return;
     if (!mobile) {
       if (listTabKind) hideListView();
-      if (autotagTabActive) hideAutotagView();
+      if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
       if (logTabActive) hideLogView();
       if (activeAuthorId) hideAuthorView(false);
       if (starsTabActive) {
@@ -2164,6 +2174,69 @@
     }
     paintLib();
 
+    // ── For You scout ──
+    const sc = section('For You scout', 'A program on your server can look through the For You feed and suggest videos for you to open and like yourself, judged by the tags you taught the AI tagger. It never likes, follows or posts anything, and it stops and tells you if the site asks it to verify. Picks appear in the For You tab. It is off until you turn it on.');
+    const scStatus = document.createElement('div');
+    scStatus.className = 'set-status';
+    const scOn = document.createElement('label');
+    scOn.className = 'set-check';
+    const scCb = document.createElement('input');
+    scCb.type = 'checkbox';
+    scCb.checked = Boolean(settings.scoutEnabled);
+    const scTxt = document.createElement('span');
+    scTxt.textContent = 'Look for picks';
+    scCb.addEventListener('change', () => saveSettings({ scoutEnabled: scCb.checked }).then(m => {
+      scStatus.textContent = m || (scCb.checked ? 'On. The scout starts at its next check.' : 'Off. The scout stops at its next check.');
+    }));
+    scOn.append(scCb, scTxt);
+    sc.appendChild(scOn);
+    const scNum = (label, unit, key, min, max, fallback) => {
+      const row = document.createElement('div');
+      row.className = 'set-try';
+      const lab = document.createElement('span'); lab.textContent = label; lab.style.cssText = 'color:#ccc;font-size:14px;flex:1;min-width:0';
+      const inp = document.createElement('input');
+      inp.className = 'set-input set-try-input'; inp.type = 'number'; inp.min = String(min); inp.max = String(max); inp.step = '1';
+      inp.value = String(Number.isInteger(settings[key]) ? settings[key] : fallback); inp.style.maxWidth = '84px';
+      const u = document.createElement('span'); u.textContent = unit; u.style.cssText = 'color:#888;font-size:13px';
+      let t = null;
+      inp.addEventListener('input', () => {
+        clearTimeout(t);
+        const v = parseInt(inp.value, 10);
+        if (!Number.isInteger(v) || v < min || v > max) { scStatus.textContent = label + ': a whole number from ' + min + ' to ' + max + '.'; return; }
+        t = setTimeout(() => saveSettings({ [key]: v }).then(m => { scStatus.textContent = m || 'Saved.'; }), 450);
+      });
+      row.append(lab, inp, u);
+      sc.appendChild(row);
+    };
+    scNum('Videos to look at per day', 'videos', 'scoutDaily', 0, 1000, 100);
+    scNum('Only suggest picks scoring at least', '%', 'scoutMin', 0, 100, 60);
+    const hoursRow = document.createElement('div');
+    hoursRow.className = 'set-try';
+    const hLab = document.createElement('span'); hLab.textContent = 'Only look between these hours'; hLab.style.cssText = 'color:#ccc;font-size:14px;flex:1;min-width:0';
+    const mkHour = key => {
+      const i = document.createElement('input');
+      i.className = 'set-input set-try-input'; i.type = 'number'; i.min = '0'; i.max = '23'; i.step = '1'; i.style.maxWidth = '64px';
+      i.value = String(Number.isInteger(settings[key]) ? settings[key] : (key === 'scoutFrom' ? 0 : 23));
+      return i;
+    };
+    const hFrom = mkHour('scoutFrom'), hTo = mkHour('scoutTo');
+    let hTimer = null;
+    const hSave = () => {
+      const a = parseInt(hFrom.value, 10), b = parseInt(hTo.value, 10);
+      if (![a, b].every(v => Number.isInteger(v) && v >= 0 && v <= 23)) { scStatus.textContent = 'Hours are whole numbers from 0 to 23.'; return; }
+      clearTimeout(hTimer);
+      hTimer = setTimeout(() => saveSettings({ scoutFrom: a, scoutTo: b }).then(m => { scStatus.textContent = m || (a <= b ? 'Saved: from ' + a + ':00 to ' + b + ':59.' : 'Saved: from ' + a + ':00 through the night to ' + b + ':59.'); }), 450);
+    };
+    hFrom.addEventListener('input', hSave); hTo.addEventListener('input', hSave);
+    const hDash = document.createElement('span'); hDash.textContent = 'to'; hDash.style.cssText = 'color:#888;font-size:13px';
+    hoursRow.append(hLab, hFrom, hDash, hTo);
+    sc.append(hoursRow, scStatus);
+    scStatus.textContent = 'Checking the scout…';
+    fetch('/api/scout', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!scStatus.isConnected || scStatus.textContent !== 'Checking the scout…') return;
+      scStatus.textContent = d && d.status ? scoutStatusText(d.status) : (d && d.available ? 'No status from the scout yet.' : 'The scout has not run yet.');
+    }).catch(() => { if (scStatus.textContent === 'Checking the scout…') scStatus.textContent = ''; });
+
     // ── hidden videos ──
     const hid = section('Hidden videos', 'Hide a video from a thumbnail, the player or the Home feed. It disappears from every list, the feed and the TV, and is never deleted. Bring videos back here.');
     const hidStatus = document.createElement('div');
@@ -2228,7 +2301,7 @@
   function showStarsTab() {
     if (settingsTabActive) hideSettingsView();
     if (listTabKind) hideListView();
-    if (autotagTabActive) hideAutotagView();
+    if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
     if (logTabActive) hideLogView();
     if (activeAuthorId) hideAuthorView();
     starsTabActive = true;
@@ -2237,7 +2310,7 @@
 
     if (isMobilePlayer()) { activeMobileTab = 'stars'; updateMobileNavActive(); }
     else {
-      document.querySelectorAll('nav .author-tab.active, nav .log-tab.active, nav .autotag-tab.active').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('nav .author-tab.active, nav .log-tab.active, nav .autotag-tab.active, nav .scout-tab.active').forEach(el => el.classList.remove('active'));
       document.querySelector('nav .stars-tab')?.classList.add('active');
     }
 
@@ -2254,7 +2327,7 @@
   function showMainContent() {
     if (settingsTabActive) hideSettingsView();
     if (listTabKind) hideListView();
-    if (autotagTabActive) hideAutotagView();
+    if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
     if (logTabActive) hideLogView();
     if (activeAuthorId) hideAuthorView();
     starsTabActive = false;
@@ -3141,6 +3214,7 @@
     }
     if (activeAuthorId) hideAuthorView(false);
     if (autotagTabActive && tab !== 'review') hideAutotagView();
+    if (scoutTabActive && tab !== 'scout') hideScoutView();
     if (tab !== 'stars') releaseGridPreviews(starsViewEl);
     activeMobileTab = tab;
     updateMobileNavActive();
@@ -3159,6 +3233,10 @@
     } else if (tab === 'recents') {
       if (playerOpen) closePlayer();
       showRecentsView();
+    } else if (tab === 'scout') {
+      if (playerOpen) closePlayer();
+      hideRecentsView();
+      showScoutTab();
     } else if (tab === 'review') {
       if (playerOpen) closePlayer();
       hideRecentsView();
@@ -3260,6 +3338,7 @@
       { id: 'stars',   label: 'Stars',   svg: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' },
       { id: 'recents', label: 'Recents', svg: '<path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L11 13.5V7h1.5v5.87l4.75 2.82-1.01 1.74z"/>' },
       { id: 'favs',    label: 'Archive',    svg: '<path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>' },
+      { id: 'scout',   label: 'For You', svg: '<path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/>' },
       { id: 'review',  label: 'Review',  svg: '<path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/>' },
     ];
     tabs.forEach(({ id, label, svg }) => {
@@ -3328,6 +3407,7 @@
     if (activeMobileTab === 'stars')   return document.getElementById('stars-view');
     if (activeMobileTab === 'recents') return recentsGridEl;
     if (activeMobileTab === 'review')  return autotagViewEl;
+    if (activeMobileTab === 'scout')   return scoutViewEl;
     if (activeMobileTab === 'favs') return listViewEl;
     return document.querySelector('main');
   }
@@ -5143,7 +5223,7 @@ function render(){
   const OSVG='<svg viewBox="0 0 24 24" width="24" height="24"><defs><linearGradient id="og" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff5f6d"/><stop offset=".28" stop-color="#ffc371"/><stop offset=".52" stop-color="#7bed9f"/><stop offset=".76" stop-color="#4fc3f7"/><stop offset="1" stop-color="#b388ff"/></linearGradient></defs><path fill="url(#og)" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/><path fill="#fff6b8" d="M20 .6l.8 2L22.8 3.4l-2 .8L20 6.2l-.8-2-2-.8 2-.8z"/><path fill="#c8f7ff" d="M4.3 14.8l.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6z"/></svg>';
   const INH=new Set(${initInh});
   const paintStar=()=>{const st=ls()[item.id]; const org=Boolean(st&&st.super); const inh=!org&&INH.has(item.id); sb.className='b'+(st?' on':'')+((org||inh)?' sup':''); if(org)sb.innerHTML=OSVG; else if(inh)sb.innerHTML=SSVG; else sb.textContent='★'; sb.title=org?'Super star (hold to make it a normal star)':inh?'Super star account (hold to make this video a super star too)':'Star (hold for a super star)';};
-  const addStar=s=>{s[item.id]={id:item.id,coverSrc:item.coverSrc,authorName:item.authorName||'',desc:item.desc||''};};
+  const addStar=s=>{s[item.id]={id:item.id,coverSrc:item.coverSrc,authorName:item.authorName||'',desc:item.desc||'',added:Date.now()};};
   paintStar();
   let starHold=null, starHeld=false;
   sb.addEventListener('pointerdown',()=>{starHeld=false;clearTimeout(starHold);starHold=setTimeout(()=>{
@@ -5278,6 +5358,7 @@ render();
   function currentViewDescriptor() {
     if (activeAuthorId) return { kind: 'author', id: activeAuthorId };
     if (autotagTabActive) return { kind: 'autotag' };
+    if (scoutTabActive) return { kind: 'scout' };
     if (logTabActive) return { kind: 'log' };
     if (settingsTabActive) return { kind: 'settings' };
     if (listTabKind) return { kind: 'list', list: listTabKind };
@@ -5307,6 +5388,7 @@ render();
       case 'list':    showListTab(d.list); return;
       case 'settings': showSettingsTab(); return;
       case 'autotag': showAutotagTab(); return;
+      case 'scout':   showScoutTab();   return;
       case 'log':     showLogTab();     return;
     }
     showStarsTab();
@@ -5317,7 +5399,7 @@ render();
       const from = currentViewDescriptor();
       if (!(from.kind === 'author' && from.id === id)) authorReturn.set(id, from);
     }
-    if (autotagTabActive) hideAutotagView();
+    if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
     if (logTabActive) hideLogView();
     if (!openAuthors.some(a => a.id === id)) openAuthors.push({ id, name });
     activeAuthorId = id;
@@ -5940,7 +6022,7 @@ render();
     if (isMobilePlayer() || logTabActive) return;
     if (settingsTabActive) hideSettingsView();
     if (listTabKind) hideListView();
-    if (autotagTabActive) hideAutotagView();
+    if (autotagTabActive) hideAutotagView(); if (scoutTabActive) hideScoutView();
     if (activeAuthorId) hideAuthorView();
     if (starsTabActive) {
       starsTabActive = false;
@@ -6498,12 +6580,531 @@ render();
     if (!cardMode) observeGridPreviews(grid);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FOR YOU PICKS — videos a scout on the server suggests; you open and like them yourself
+  // The scout (ttpull) writes the candidates, autotagTT scores them, this page only shows them and records what you
+  // decided. Nothing here likes anything. See docs/scout/README.md.
+  // ═══════════════════════════════════════════════════════════════════════════
+  let scoutData = null, scoutError = '', scoutBucket = 'pending', scoutShown = 60, scoutTimer = null, scoutSig = '';
+  let scoutTabActive = false, scoutViewEl = null;
+  let scoutViewMode = 'cards', scoutStackLive = false, scoutSwipeCleanup = null;      // phones: swipe cards or the grid
+  try { if (localStorage.getItem('sp_scout_view') === 'grid') scoutViewMode = 'grid'; } catch (_) {}
+
+  function scoutAgo(ms) {
+    if (!ms) return '';
+    const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+    return m < 1 ? 'just now' : m < 90 ? m + ' min ago' : Math.round(m / 60) + ' h ago';
+  }
+
+  // " Next session in 6 min." / " Tries again in 52 min." (nothing when it did not say, or the time has passed)
+  function scoutNextText(st) {
+    if (!st || !st.next || st.next <= Date.now()) return '';
+    const m = Math.max(1, Math.round((st.next - Date.now()) / 60000));
+    const when = m < 90 ? m + ' min' : Math.round(m / 60) + ' h';
+    return (st.state === 'idle' ? ' Next session in about ' : ' Tries again in about ') + when + '.';
+  }
+
+  // One line for the status bar: { tone: ok | rest | warn | bad | off, label, text }
+  function scoutStatusInfo(st) {
+    const on = !!settings.scoutEnabled;
+    if (!st) {
+      if (!on) return { tone: 'off', label: 'Off', text: 'The scout is switched off. Turn it on in Settings.' };
+      return { tone: 'rest', label: 'Waiting', text: 'The scout is on but has not reported yet. It starts at its next check.' };
+    }
+    const stale = st.updated && Date.now() - st.updated > 20 * 60000;
+    switch (st.state) {
+      case 'running':
+        if (stale) return { tone: 'warn', label: 'Not responding', text: 'It said it was looking through the feed, but has not reported for ' + scoutAgo(st.updated).replace(' ago', '') + '. It may be down.' };
+        return { tone: 'ok', label: 'Running', text: 'Looking through the feed now.' };
+      case 'idle': return { tone: 'rest', label: 'Resting', text: (st.message || 'Between sessions.') + scoutNextText(st) };
+      case 'paused': return { tone: 'warn', label: 'Paused', text: (st.message || 'Outside your hours, or today’s limit is reached.') + scoutNextText(st) };
+      case 'off': return { tone: 'off', label: 'Off', text: on ? 'Switching on… it starts at its next check.' : 'The scout is switched off. Turn it on in Settings.' };
+      case 'challenge': return { tone: 'bad', label: 'Stopped', text: 'The site asked it to verify. Finish the check in your own browser; it carries on by itself.' };
+      case 'login': return { tone: 'bad', label: 'Needs login', text: 'The site logged the scout out. Push your session again from the ttpull extension.' };
+      case 'error': return { tone: 'bad', label: 'Stopped', text: (st.message || 'Stopped by an error.') + scoutNextText(st) };
+    }
+    return { tone: 'rest', label: st.state || 'Unknown', text: st.message || '' };
+  }
+
+  // The same status as one sentence (Settings page)
+  function scoutStatusText(st) {
+    const i = scoutStatusInfo(st);
+    const today = st && st.today && st.today.date ? ' Today: looked at ' + st.today.viewed + ', picked ' + st.today.collected + '.' : '';
+    return i.label + ': ' + i.text + (st && st.updated ? ' (' + scoutAgo(st.updated) + ')' : '') + today;
+  }
+
+  // The status bar above the grid: a coloured dot, what the scout is doing, today's numbers, and when it last reported
+  function buildScoutStatus(st) {
+    const info = scoutStatusInfo(st);
+    const bar = document.createElement('div');
+    bar.className = 'scout-status ' + info.tone;
+    const dot = document.createElement('span'); dot.className = 'scout-dot';
+    const label = document.createElement('b'); label.textContent = info.label;
+    const text = document.createElement('span'); text.className = 'scout-status-text'; text.textContent = info.text;
+    bar.append(dot, label, text);
+    const t = st && st.today && st.today.date ? st.today : null;
+    if (t) {
+      const cap = Number(settings.scoutDaily) || 0;
+      const nums = document.createElement('span'); nums.className = 'scout-status-nums';
+      nums.textContent = 'Today: looked at ' + t.viewed + (cap ? ' of ' + cap : '') + ' · picked ' + t.collected;
+      bar.appendChild(nums);
+    }
+    if (st && st.updated) {
+      const age = document.createElement('span'); age.className = 'scout-age'; age.dataset.t = st.updated; age.textContent = 'updated ' + scoutAgo(st.updated);
+      bar.appendChild(age);
+    }
+    return bar;
+  }
+
+  // The likes list of the archive as a Set (so a pick you liked is noticed without you pressing anything)
+  let _scoutLikes = null;
+  function scoutInLikes(id) {
+    const d = _dbCache;
+    if (!d || !d.likes) return false;
+    if (!_scoutLikes || _scoutLikes.src !== d) _scoutLikes = { src: d, set: new Set([...(d.likes.officialList || []), ...(d.likes.downloaded || [])].map(String)) };
+    return _scoutLikes.set.has(String(id));
+  }
+
+  function scoutBuckets() {
+    const out = { pending: [], liked: [], skipped: [] };
+    if (!scoutData) return out;
+    const dec = scoutData.decisions || {};
+    for (const c of scoutData.candidates || []) {
+      const d = dec[c.id] && dec[c.id].d;
+      const auto = scoutInLikes(c.id);
+      if (d === 'liked' || auto) out.liked.push(c);
+      else if (d === 'skipped') out.skipped.push(c);
+      else out.pending.push(c);      // 'opened' stays pending: it only marks the card, you still choose Liked or Skip
+    }
+    return out;
+  }
+
+  // The number of picks waiting, on the tab (desktop bar and phone bar)
+  function scoutBadge() {
+    let n = 0;
+    try { n = scoutData ? scoutBuckets().pending.length : 0; } catch (_) { /* called before the data exists */ }
+    document.querySelectorAll('nav .scout-tab, #sp-mobile-nav .sp-nav-btn[data-tab="scout"]').forEach(t => {
+      let b = t.querySelector('.sp-badge');
+      if (!n) { if (b) b.remove(); return; }
+      if (!b) { b = document.createElement('span'); b.className = 'sp-badge'; t.appendChild(b); }
+      b.textContent = n > 99 ? '99+' : String(n);
+    });
+  }
+
+  // The page of the video on the site: the profile link from Settings + /video/<id> (needs a link that ends in {username})
+  function scoutVideoUrl(c) {
+    const t = String(settings.profileUrl || '').trim();
+    if (!c.author || !profileUrlTemplateOk(t) || !t.endsWith('{username}')) return '';
+    return profileUrlFor(c.author) + '/video/' + c.id;
+  }
+
+  async function scoutLoad() {
+    try {
+      const r = await fetch('/api/scout', { cache: 'no-store' });
+      if (!r.ok) throw new Error('status ' + r.status);
+      const d = await r.json();
+      const sig = JSON.stringify([(d.candidates || []).map(c => c.id + ':' + c.score), Object.keys(d.decisions || {}).length, d.status && d.status.updated, d.available]);
+      scoutError = '';
+      const same = sig === scoutSig && scoutData;
+      scoutSig = sig; scoutData = d;
+      if (same) return;   // nothing new: leave the screen (and its scroll position) alone
+    } catch (e) { scoutError = 'Could not read the picks (' + (e.message || e) + ').'; }
+    scoutBadge();
+    if (scoutTabActive && scoutStackLive && scoutData) {          // a card is being swiped: only refresh the bar and the counts
+      const bar = scoutViewEl.querySelector('.scout-status');
+      if (bar) bar.replaceWith(buildScoutStatus(scoutData.status));
+      scoutCounts();
+    } else if (scoutTabActive) renderScoutView();
+  }
+
+  // keep the number on the tab fresh even while the tab is closed
+  setTimeout(() => { scoutLoad(); setInterval(() => { if (!document.hidden && !scoutTabActive) scoutLoad(); }, 5 * 60000); }, 2000);
+
+  function scoutPoll() {
+    clearInterval(scoutTimer);
+    scoutTimer = setInterval(() => {
+      if (!scoutTabActive) { clearInterval(scoutTimer); scoutTimer = null; return; }
+      scoutLoad();
+      const bar = document.querySelector('#scout-view .scout-status');      // keep the ages and countdown fresh between reloads
+      if (bar && scoutData) bar.replaceWith(buildScoutStatus(scoutData.status));
+    }, 60000);
+  }
+
+  // decision: liked | skipped | opened | pending (undo). Shown at once, then saved; a failed save brings the old state back.
+  // quiet: the swipe cards are on screen, so do not rebuild the view under the finger (only the counts change)
+  async function scoutDecide(id, decision, quiet) {
+    if (!scoutData) return;
+    const dec = scoutData.decisions || (scoutData.decisions = {});
+    if (decision === 'pending') delete dec[id]; else dec[id] = { d: decision, t: Date.now() };
+    if (quiet) { scoutBadge(); scoutCounts(); } else renderScoutView();
+    try {
+      const r = await fetch('/api/scout/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, decision }) });
+      if (!r.ok) throw new Error('status ' + r.status);
+    } catch (e) { spToast('Could not save that (' + (e.message || e) + ')'); scoutSig = ''; scoutLoad(); }
+  }
+
+  // Was a tag right (1) or wrong (-1)? Pressing the same answer again forgets it.
+  async function scoutTagVote(id, tag, value, quiet) {
+    if (!scoutData) return;
+    const all = scoutData.tagFeedback || (scoutData.tagFeedback = {});
+    const mine = all[id] || (all[id] = {});
+    const v = mine[tag] === value ? 0 : value;
+    if (v === 0) delete mine[tag]; else mine[tag] = v;
+    if (!quiet) renderScoutView();
+    try {
+      const r = await fetch('/api/scout/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, tag, value: v }) });
+      if (!r.ok) throw new Error('status ' + r.status);
+    } catch (e) { spToast('Could not save that (' + (e.message || e) + ')'); scoutSig = ''; scoutLoad(); }
+    return v;
+  }
+
+  // the numbers on the Pending / Liked / Skipped buttons, updated in place
+  function scoutCounts() {
+    if (!scoutViewEl || !scoutData) return;
+    const b = scoutBuckets(), labels = { pending: 'Pending', liked: 'Liked', skipped: 'Skipped' };
+    scoutViewEl.querySelectorAll('#scout-head .at-mode[data-bucket]').forEach(el => { el.textContent = labels[el.dataset.bucket] + ' ' + b[el.dataset.bucket].length.toLocaleString(); });
+  }
+
+  function buildScoutCard(c, bucket) {
+    const card = document.createElement('div');
+    const wasOpened = bucket === 'pending' && scoutData.decisions[c.id] && scoutData.decisions[c.id].d === 'opened';
+    card.className = 'scout-card' + (wasOpened ? ' opened' : '');
+    const url = scoutVideoUrl(c);
+    const open = () => {
+      if (!url) { spToast('Set the profile link in Settings to open videos from here'); return; }
+      window.open(url, '_blank', 'noopener');
+      if (bucket === 'pending' && !wasOpened) scoutDecide(c.id, 'opened');
+    };
+    const cov = document.createElement('div');
+    cov.className = 'scout-cover';
+    const img = document.createElement('img');
+    img.loading = 'lazy'; img.alt = ''; img.src = 'data/.appdata/' + c.cover;
+    img.addEventListener('error', () => cov.classList.add('nocover'));
+    const badge = document.createElement('span');
+    badge.className = 'scout-score'; badge.textContent = Math.round(c.score * 100) + '%'; badge.title = 'How well this fits the tags you taught the AI tagger';
+    cov.append(img, badge);
+    if (wasOpened) { const o = document.createElement('span'); o.className = 'scout-opened'; o.textContent = 'Opened'; cov.appendChild(o); }
+    cov.addEventListener('click', open);
+    const body = document.createElement('div');
+    body.className = 'scout-body';
+    const who = document.createElement('div'); who.className = 'scout-author'; who.textContent = c.author ? '@' + c.author : '(unknown)';
+    const desc = document.createElement('div'); desc.className = 'scout-desc'; desc.textContent = c.desc || '';
+    body.append(who);
+    if (c.desc) body.appendChild(desc);
+    if (c.tags && c.tags.length) {
+      const tg = document.createElement('div'); tg.className = 'scout-tags';
+      const votes = (scoutData.tagFeedback && scoutData.tagFeedback[c.id]) || {};
+      c.tags.forEach(([name, sc]) => {
+        const t = document.createElement('span');
+        t.className = 'scout-tag' + (votes[name] === 1 ? ' right' : votes[name] === -1 ? ' wrong' : '');
+        const lab = document.createElement('span'); lab.textContent = groupDisplayName(name) + ' ' + Math.round(sc * 100) + '%';
+        t.appendChild(lab);
+        [[1, '✓', 'Yes, this video fits this tag'], [-1, '✗', 'No, this tag is wrong for this video']].forEach(([val, ch, tip]) => {
+          const b = document.createElement('button'); b.className = 'scout-vote' + (votes[name] === val ? ' on' : ''); b.textContent = ch; b.title = tip;
+          b.addEventListener('click', e => { e.stopPropagation(); scoutTagVote(c.id, name, val); });
+          t.appendChild(b);
+        });
+        tg.appendChild(t);
+      });
+      body.appendChild(tg);
+    }
+    const act = document.createElement('div');
+    act.className = 'scout-actions';
+    const btn = (text, cls, fn, title) => { const b = document.createElement('button'); b.className = 'scout-btn ' + cls; b.textContent = text; if (title) b.title = title; b.addEventListener('click', e => { e.stopPropagation(); fn(); }); act.appendChild(b); };
+    if (bucket === 'pending') {
+      btn('Open', 'primary', open, url ? 'Open this video on the site' : 'Set the profile link in Settings first');
+      btn('I liked it', '', () => scoutDecide(c.id, 'liked'), 'Teaches the scorer that this was a good pick');
+      btn('Skip', '', () => scoutDecide(c.id, 'skipped'), 'Not for me: teaches the scorer this was a bad pick');
+    } else {
+      const auto = bucket === 'liked' && !(scoutData.decisions[c.id] && scoutData.decisions[c.id].d === 'liked');
+      if (auto) { const n = document.createElement('span'); n.className = 'at-note'; n.textContent = 'In your likes'; act.appendChild(n); }
+      else btn('Undo', '', () => scoutDecide(c.id, 'pending'));
+    }
+    card.append(cov, body, act);
+    return card;
+  }
+
+  // Phones: the pending picks as swipe cards, like the tag review. Right = I liked it, left = skip, tap or the arrow = open on the site.
+  // Opening only marks the pick; it stays pending until you swipe. Nothing here likes anything on the site.
+  function buildScoutStack(list) {
+    const queue = list.slice();
+    const root = document.createElement('div');
+    root.id = 'scout-swipe';
+    const stack = document.createElement('div'); stack.className = 'at-sw-stack';
+    const count = document.createElement('div'); count.className = 'at-sw-count';
+    const toast = document.createElement('div'); toast.className = 'at-sw-toast';
+    const btns = document.createElement('div'); btns.className = 'at-sw-btns';
+    let cur = null, busy = false, undoItem = null, toastTimer = null;
+
+    const say = (text, undo) => {
+      clearTimeout(toastTimer);
+      toast.textContent = text;
+      if (undo) { const u = document.createElement('button'); u.textContent = 'Undo'; u.addEventListener('click', undo); toast.appendChild(u); }
+      toast.classList.add('on');
+      toastTimer = setTimeout(() => toast.classList.remove('on'), 4500);
+    };
+    const wasOpened = id => { const d = scoutData.decisions[id]; return !!d && d.d === 'opened'; };
+
+    function markOpened(card) {
+      if (card.querySelector('.scout-opened')) return;
+      const o = document.createElement('span'); o.className = 'scout-opened'; o.style.top = '40px'; o.textContent = 'Opened'; card.appendChild(o);
+    }
+
+    function openIt() {
+      if (!cur || !queue.length) return;
+      const item = queue[0], url = scoutVideoUrl(item);
+      if (!url) { say('Set the profile link in Settings to open videos from here'); return; }
+      window.open(url, '_blank', 'noopener');
+      if (!wasOpened(item.id)) scoutDecide(item.id, 'opened', true);
+      markOpened(cur);
+    }
+
+    function makeCard(item) {
+      const card = document.createElement('div');
+      card.className = 'at-sw-card'; card.dataset.id = item.id;
+      const img = document.createElement('img'); img.className = 'at-sw-img'; img.src = 'data/.appdata/' + item.cover; img.alt = '';
+      img.onerror = () => { img.style.display = 'none'; };
+      card.appendChild(img);
+      [['acc', 'LIKED'], ['rej', 'SKIP']].forEach(([c, t]) => {
+        const st = document.createElement('div'); st.className = 'at-sw-stamp ' + c; st.textContent = t; card.appendChild(st);
+      });
+      const meta = document.createElement('div'); meta.className = 'at-sw-info scout-sw-info';
+      const top = document.createElement('div');
+      const who = document.createElement('span'); who.className = 'at-sw-user'; who.style.pointerEvents = 'none'; who.textContent = item.author ? '@' + item.author : '(unknown)'; top.appendChild(who);
+      const sc = document.createElement('span'); sc.className = 'at-sw-score'; sc.textContent = Math.round(item.score * 100) + '%'; sc.title = 'How well this fits the tags you taught the AI tagger'; top.appendChild(sc);
+      meta.appendChild(top);
+      if (item.desc) { const cap = document.createElement('div'); cap.className = 'at-sw-cap'; cap.textContent = item.desc.length > 110 ? item.desc.slice(0, 110) + '…' : item.desc; meta.appendChild(cap); }
+      if (item.tags && item.tags.length) {
+        const tg = document.createElement('div'); tg.className = 'scout-tags scout-sw-tags';
+        const votes = (scoutData.tagFeedback && scoutData.tagFeedback[item.id]) || {};
+        item.tags.forEach(([name, sco]) => {
+          const t = document.createElement('span');
+          t.className = 'scout-tag' + (votes[name] === 1 ? ' right' : votes[name] === -1 ? ' wrong' : '');
+          const lab = document.createElement('span'); lab.textContent = groupDisplayName(name) + ' ' + Math.round(sco * 100) + '%'; t.appendChild(lab);
+          [[1, '✓', 'Yes, this video fits this tag'], [-1, '✗', 'No, this tag is wrong for this video']].forEach(([val, ch, tip]) => {
+            const b = document.createElement('button'); b.className = 'scout-vote'; b.textContent = ch; b.title = tip;
+            b.addEventListener('click', async e => {
+              e.stopPropagation();
+              const v = await scoutTagVote(item.id, name, val, true);
+              t.className = 'scout-tag' + (v === 1 ? ' right' : v === -1 ? ' wrong' : '');
+              t.querySelectorAll('.scout-vote').forEach((x, i) => x.classList.toggle('on', v === (i ? -1 : 1)));
+            });
+            t.appendChild(b);
+          });
+          tg.appendChild(t);
+        });
+        meta.appendChild(tg);
+      }
+      card.appendChild(meta);
+      if (wasOpened(item.id)) markOpened(card);
+      return card;
+    }
+
+    function stamps(card, dx, thr) {
+      const o = x => String(Math.max(0, Math.min(1, x)));
+      card.querySelector('.acc').style.opacity = o(dx / thr);
+      card.querySelector('.rej').style.opacity = o(-dx / thr);
+    }
+
+    function fly(decision) {
+      if (busy || !cur || !queue.length) return;
+      busy = true;
+      const W = root.clientWidth || 360, card = cur;
+      card.style.transition = 'transform .24s ease-out, opacity .24s';
+      card.style.transform = decision === 'liked' ? `translate(${W * 1.3}px, -40px) rotate(18deg)` : `translate(${-W * 1.3}px, -40px) rotate(-18deg)`;
+      card.style.opacity = '0';
+      stamps(card, decision === 'liked' ? 1 : -1, 1);
+      setTimeout(() => advance(decision), 230);
+    }
+
+    function advance(decision) {
+      const item = queue.shift();
+      cur = null;
+      undoItem = item;
+      scoutDecide(item.id, decision, true);
+      say(decision === 'liked' ? 'Marked as liked' : 'Skipped', () => {
+        if (!undoItem || busy) return;
+        const it = undoItem; undoItem = null;
+        scoutDecide(it.id, 'pending', true);
+        queue.unshift(it); toast.classList.remove('on'); mount();
+      });
+      busy = false;
+      mount();
+    }
+
+    function attachGestures(card) {
+      let sx = 0, sy = 0, st = 0, dx = 0, dy = 0, dragging = false, moved = false;
+      const W = () => root.clientWidth || 360;
+      card.addEventListener('pointerdown', e => {
+        if (busy || e.target.closest('button, a')) return;
+        dragging = true; moved = false; dx = dy = 0; sx = e.clientX; sy = e.clientY; st = Date.now();
+        try { card.setPointerCapture(e.pointerId); } catch (_) {}
+        card.style.transition = 'none';
+      });
+      card.addEventListener('pointermove', e => {
+        if (!dragging) return;
+        dx = e.clientX - sx; dy = e.clientY - sy;
+        if (Math.abs(dx) > 6 || Math.abs(dy) > 6) moved = true;
+        card.style.transform = `translate(${dx}px, ${dy * 0.3}px) rotate(${dx / 18}deg)`;
+        stamps(card, dx, Math.max(90, W() * 0.28));
+      });
+      const end = () => {
+        if (!dragging) return;
+        dragging = false;
+        const dt = Math.max(1, Date.now() - st), vx = dx / dt, thrX = Math.max(90, W() * 0.28);
+        const decision = (dx > thrX || (dx > 50 && vx > 0.6)) ? 'liked' : (dx < -thrX || (dx < -50 && vx < -0.6)) ? 'skipped' : null;
+        if (decision) { fly(decision); return; }
+        card.style.transition = 'transform .2s ease-out';
+        card.style.transform = '';
+        stamps(card, 0, 1);
+        if (!moved && dt < 300) openIt();                          // a tap opens the video on the site
+      };
+      card.addEventListener('pointerup', end);
+      card.addEventListener('pointercancel', end);
+    }
+
+    function mount() {
+      stack.textContent = '';
+      cur = null;
+      count.textContent = queue.length ? queue.length.toLocaleString() + ' left' : '';
+      if (!queue.length) {
+        const d = document.createElement('div'); d.className = 'at-sw-done';
+        d.textContent = 'All picks reviewed. New ones show up here as the scout finds them.';
+        stack.appendChild(d); btns.style.display = 'none';
+        return;
+      }
+      btns.style.display = '';
+      if (queue[1]) stack.appendChild(makeCard(queue[1])).classList.add('behind');
+      cur = makeCard(queue[0]);
+      stack.appendChild(cur);
+      attachGestures(cur);
+    }
+
+    [['skipped', '✕', 'reject', 'Skip: not for me'], ['open', '↗', 'open', 'Open this video on the site (it stays pending)'], ['liked', '✓', 'accept', 'I liked it']].forEach(([d, t, c, title]) => {
+      const b = document.createElement('button');
+      b.className = 'at-sw-btn ' + c; b.textContent = t; b.title = title;
+      b.addEventListener('click', e => { e.stopPropagation(); if (d === 'open') openIt(); else fly(d); });
+      btns.appendChild(b);
+    });
+    root.append(stack, count, btns, toast);
+    mount();
+
+    const onKey = e => {
+      if (!root.isConnected || !scoutTabActive || e.target.closest('input, select, textarea')) return;
+      if (e.key === 'ArrowRight') fly('liked'); else if (e.key === 'ArrowLeft') fly('skipped'); else if (e.key === 'ArrowUp') openIt();
+      else return;
+      e.preventDefault();
+    };
+    document.addEventListener('keydown', onKey);
+    scoutSwipeCleanup = () => document.removeEventListener('keydown', onKey);
+    return root;
+  }
+
+  function renderScoutView() {
+    if (!scoutViewEl) return;
+    const prev = scoutViewEl.querySelector('#scout-grid');
+    const keepScroll = prev ? prev.scrollTop : 0;
+    if (scoutSwipeCleanup) { scoutSwipeCleanup(); scoutSwipeCleanup = null; }
+    scoutStackLive = false;
+    scoutViewEl.innerHTML = '';
+    const head = document.createElement('div');
+    head.id = 'scout-head';
+    const row1 = document.createElement('div'); row1.className = 'at-row';
+    const title = document.createElement('span'); title.className = 'stars-main-title'; title.textContent = 'For You picks';
+    const modes = document.createElement('div'); modes.className = 'at-modes';
+    const b = scoutBuckets();
+    const labels = { pending: 'Pending', liked: 'Liked', skipped: 'Skipped' };
+    ['pending', 'liked', 'skipped'].forEach(m => {
+      const el = document.createElement('button');
+      el.className = 'at-mode' + (scoutBucket === m ? ' on' : '');
+      el.dataset.bucket = m;
+      el.textContent = labels[m] + (scoutData ? ' ' + b[m].length.toLocaleString() : '');
+      el.addEventListener('click', () => { scoutBucket = m; scoutShown = 60; renderScoutView(); });
+      modes.appendChild(el);
+    });
+    const refresh = document.createElement('button');
+    refresh.className = 'at-mode'; refresh.textContent = 'Refresh'; refresh.addEventListener('click', () => { scoutSig = ''; scoutLoad(); });
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'at-mode'; viewBtn.textContent = scoutViewMode === 'cards' ? 'Grid' : 'Cards'; viewBtn.title = 'Switch between swipe cards and the grid';
+    viewBtn.addEventListener('click', () => { scoutViewMode = scoutViewMode === 'cards' ? 'grid' : 'cards'; try { localStorage.setItem('sp_scout_view', scoutViewMode); } catch (_) {} renderScoutView(); });
+    row1.append(title, modes, ...(isMobilePlayer() && scoutBucket === 'pending' ? [viewBtn] : []), refresh);
+    head.appendChild(row1);
+
+    const grid = document.createElement('div');
+    grid.id = 'scout-grid';
+    const msg = text => { const d = document.createElement('div'); d.className = 'scout-msg'; d.textContent = text; grid.appendChild(d); };
+    const st = scoutData && scoutData.status;
+    const banner = scoutData ? buildScoutStatus(st) : null;
+    if (scoutError) msg(scoutError);
+    else if (!scoutData) msg('Loading…');
+    else if (!scoutData.available) msg(settings.scoutEnabled ? 'The scout is on but has not suggested anything yet. It starts at its next check.' : 'No picks yet. Turn on the For You scout in Settings.');
+    else if (!b[scoutBucket].length) msg(scoutBucket === 'pending' ? 'Nothing waiting. New picks show up here as the scout finds them.' : 'Nothing here yet.');
+    else if (isMobilePlayer() && scoutBucket === 'pending' && scoutViewMode === 'cards') {
+      scoutStackLive = true;
+      scoutViewEl.append(head, ...(banner ? [banner] : []), buildScoutStack(b.pending));
+      return;
+    } else {
+      b[scoutBucket].slice(0, scoutShown).forEach(c => grid.appendChild(buildScoutCard(c, scoutBucket)));
+      if (b[scoutBucket].length > scoutShown) {
+        const more = document.createElement('button');
+        more.className = 'at-mode'; more.style.gridColumn = '1 / -1'; more.style.justifySelf = 'center';
+        more.textContent = 'Show more (' + (b[scoutBucket].length - scoutShown).toLocaleString() + ' left)';
+        more.addEventListener('click', () => { scoutShown += 60; renderScoutView(); });
+        grid.appendChild(more);
+      }
+    }
+    scoutViewEl.append(head, ...(banner ? [banner] : []), grid);
+    grid.scrollTop = keepScroll;
+  }
+
+  function showScoutTab() {
+    if (scoutTabActive) return;
+    if (settingsTabActive && !isMobilePlayer()) hideSettingsView();
+    if (listTabKind && !isMobilePlayer()) hideListView();
+    if (activeAuthorId) hideAuthorView();
+    if (logTabActive) hideLogView();
+    if (autotagTabActive) hideAutotagView();
+    if (starsTabActive) {
+      starsTabActive = false;
+      if (starsViewEl) { releaseGridPreviews(starsViewEl); starsViewEl.style.display = 'none'; }
+      document.querySelector('nav .stars-tab')?.classList.remove('active');
+    }
+    closeVideoOverlay();
+    scoutTabActive = true;
+    document.querySelector('main')?.style.setProperty('display', 'none');
+    document.body.classList.add('sp-scout-open');
+    if (isMobilePlayer()) { activeMobileTab = 'scout'; updateMobileNavActive(); }
+    else document.querySelector('nav .scout-tab')?.classList.add('active');
+    if (!scoutViewEl) {
+      scoutViewEl = document.createElement('div');
+      scoutViewEl.id = 'scout-view';
+      const main = document.querySelector('main');
+      if (main) main.parentNode.insertBefore(scoutViewEl, main); else document.body.appendChild(scoutViewEl);
+    }
+    scoutViewEl.style.display = 'flex';
+    ensureArchiveDb();
+    renderScoutView();
+    scoutLoad();
+    scoutPoll();
+    if (!_dbCache) archiveDbPromise().catch(() => {}).then(() => { if (scoutTabActive) renderScoutView(); });
+  }
+
+  function hideScoutView() {
+    if (!scoutTabActive) return;
+    scoutTabActive = false;
+    clearInterval(scoutTimer); scoutTimer = null;
+    if (scoutViewEl) scoutViewEl.style.display = 'none';
+    document.body.classList.remove('sp-scout-open');
+    document.querySelector('nav .scout-tab')?.classList.remove('active');
+  }
+
   function showAutotagTab() {
     if (autotagTabActive) return;
     if (settingsTabActive && !isMobilePlayer()) hideSettingsView();
     if (listTabKind && !isMobilePlayer()) hideListView();
     if (activeAuthorId) hideAuthorView();
     if (logTabActive) hideLogView();
+    if (scoutTabActive) hideScoutView();
     if (starsTabActive) {
       starsTabActive = false;
       if (starsViewEl) { releaseGridPreviews(starsViewEl); starsViewEl.style.display = 'none'; }
@@ -7151,6 +7752,187 @@ render();
     autotagViewEl.appendChild(panel);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SEARCH — usernames and video ids / file names (the search box in the top nav)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Usernames match on the current and past usernames and on display names; a video matches on any part of its id, so a
+  // pasted file name ("7612880405837942030.mp4") or path works too. Hidden videos never show up.
+  function searchArchive(raw) {
+    const d = _dbCache;
+    const out = { users: [], videos: [] };
+    if (!d) return out;
+    let q = String(raw || '').trim().toLowerCase().replace(/^@+/, '');
+    if (!q) return out;
+    const counts = followCounts();
+    for (const [id, a] of Object.entries(d.authors)) {
+      const names = (a.uniqueIds || []).map(n => String(n).toLowerCase());
+      const nicks = (a.nicknames || []).map(n => String(n).toLowerCase());
+      let score = 99;
+      for (const n of names) score = Math.min(score, n === q ? 0 : n.startsWith(q) ? 1 : n.includes(q) ? 2 : 99);
+      for (const n of nicks) score = Math.min(score, n === q ? 3 : n.startsWith(q) ? 4 : n.includes(q) ? 5 : 99);
+      if (score === 99 || !names[0]) continue;
+      const n = counts.get(id) || 0;
+      out.users.push({ id, name: a.uniqueIds[0], nick: (a.nicknames && a.nicknames[0]) || '', videos: n, rank: score + (n ? 0 : 10) });
+    }
+    out.users.sort((x, y) => x.rank - y.rank || y.videos - x.videos);
+    out.users.length = Math.min(out.users.length, 8);
+    const idq = q.split(/[\\/]/).pop().replace(/\.(mp4|jpe?g)$/, '');
+    if (/^\d{3,}$/.test(idq)) {
+      const have = downloadedSet(), found = [];
+      for (const id in d.videos) {
+        if (isHidden(id)) continue;
+        const at = id.indexOf(idq);
+        if (at < 0) continue;
+        found.push({ id, rank: (id === idq ? 0 : at === 0 ? 1 : id.endsWith(idq) ? 2 : 3) + (have.has(id) ? 0 : 10), have: have.has(id) });
+        if (found.length > 400) break;
+      }
+      found.sort((x, y) => x.rank - y.rank);
+      out.videos = found.slice(0, 8).map(f => {
+        const v = d.videos[f.id], a = d.authors[v.authorId];
+        return { id: f.id, have: f.have, author: (a && a.uniqueIds && a.uniqueIds[0]) || '' };
+      });
+    }
+    return out;
+  }
+
+  // Play a searched video, with the rest of its creator's videos around it so the arrow keys keep going
+  function openSearchedVideo(id) {
+    const d = _dbCache, v = d && d.videos[id];
+    if (!v) return;
+    if (!downloadedSet().has(id)) { spToast('That video is not downloaded'); return; }
+    const list = authorVideos(v.authorId);
+    let idx = list.findIndex(x => x.id === id);
+    if (idx < 0) {   // not among the creator's listed videos: open it alone
+      const dir = videoDirFor(id), a = d.authors[v.authorId];
+      list.length = 0;
+      list.push({ id, authorName: (a && a.uniqueIds && a.uniqueIds[0]) || '', desc: d.videoDescriptions[id] || '', createTime: v.createTime || 0,
+        coverSrc: `data/${dir}/covers/${id}.jpg`, videoPath: `data/${dir}/videos/${id}.mp4` });
+      idx = 0;
+    }
+    openVideoOverlay(idx, list);
+  }
+
+  function buildNavSearch(nav) {
+    if (nav.querySelector('.sp-nav-search')) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'sp-nav-search';
+    wrap.innerHTML = '<svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Users or video ids';
+    input.title = 'Search usernames, video ids and file names (press / to jump here)';
+    input.autocomplete = 'off'; input.autocapitalize = 'off'; input.spellcheck = false;
+    input.setAttribute('aria-label', 'Search usernames, video ids and file names');
+    wrap.appendChild(input);
+    const log = nav.querySelector('.log-tab');
+    if (log) nav.insertBefore(wrap, log); else nav.appendChild(wrap);
+
+    const box = document.createElement('div');
+    box.className = 'sp-search-results';
+    box.style.display = 'none';
+    document.body.appendChild(box);
+
+    let rows = [], sel = 0, timer = null;
+    const close = () => { box.style.display = 'none'; rows = []; };
+    const place = () => {
+      const r = wrap.getBoundingClientRect();
+      box.style.top = Math.round(r.bottom + 6) + 'px';
+      box.style.right = Math.max(8, Math.round(window.innerWidth - r.right)) + 'px';
+    };
+    const choose = i => {
+      const row = rows[i];
+      if (!row) return;
+      close(); input.value = ''; input.blur();
+      row.go();
+    };
+    const mark = () => rows.forEach((r, i) => r.el.classList.toggle('sel', i === sel));
+    const note = text => { const n = document.createElement('div'); n.className = 'sp-search-note'; n.textContent = text; return n; };
+    const head = text => { const h = document.createElement('div'); h.className = 'sp-search-head'; h.textContent = text; return h; };
+
+    function render() {
+      const q = input.value.trim();
+      if (!q) { close(); return; }
+      box.textContent = '';
+      rows = []; sel = 0;
+      place();
+      box.style.display = 'block';
+      if (!_dbCache) {
+        box.appendChild(note(_dbFailed ? 'The archive could not be read.' : 'Loading the archive…'));
+        ensureArchiveDb();
+        archiveDbPromise().then(() => { if (input.value.trim() === q) render(); }).catch(() => {});
+        return;
+      }
+      const res = searchArchive(q);
+      if (res.users.length) {
+        box.appendChild(head('Users'));
+        res.users.forEach(u => {
+          const el = document.createElement('div');
+          el.className = 'sp-search-row';
+          el.innerHTML = '<span class="sp-sr-main"></span><span class="sp-sr-sub"></span><span class="sp-sr-count"></span>';
+          el.querySelector('.sp-sr-main').textContent = '@' + u.name;
+          el.querySelector('.sp-sr-sub').textContent = u.nick && u.nick !== u.name ? u.nick : '';
+          el.querySelector('.sp-sr-count').textContent = u.videos ? u.videos.toLocaleString() + (u.videos === 1 ? ' video' : ' videos') : 'no videos';
+          rows.push({ el, go: () => showAuthorTab(u.id, u.name) });
+          box.appendChild(el);
+        });
+      }
+      if (res.videos.length) {
+        box.appendChild(head('Videos'));
+        res.videos.forEach(v => {
+          const el = document.createElement('div');
+          el.className = 'sp-search-row' + (v.have ? '' : ' dim');
+          if (v.have) { const im = document.createElement('img'); im.loading = 'lazy'; im.src = coverSrcFor(v.id); im.alt = ''; el.appendChild(im); }
+          const main = document.createElement('span'); main.className = 'sp-sr-main sp-sr-id'; main.textContent = v.id;
+          const sub = document.createElement('span'); sub.className = 'sp-sr-sub'; sub.textContent = v.author ? '@' + v.author : '';
+          const cnt = document.createElement('span'); cnt.className = 'sp-sr-count'; cnt.textContent = v.have ? '' : 'not downloaded';
+          el.append(main, sub, cnt);
+          rows.push({ el, go: () => openSearchedVideo(v.id) });
+          box.appendChild(el);
+        });
+      }
+      if (!rows.length) box.appendChild(note('No users or videos match.'));
+      else box.appendChild(note('↑ ↓ to move · Enter to open · Esc to close'));
+      rows.forEach((r, i) => {
+        r.el.addEventListener('mousemove', () => { if (sel !== i) { sel = i; mark(); } });
+        r.el.addEventListener('mousedown', e => { e.preventDefault(); choose(i); });   // before the input loses focus
+      });
+      mark();
+    }
+
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(render, 60); });
+    input.addEventListener('focus', () => { if (input.value.trim()) render(); });
+    input.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!rows.length) return;
+        e.preventDefault();
+        sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+        mark();
+        rows[sel].el.scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        clearTimeout(timer);
+        if (!rows.length) render();
+        choose(sel);
+      } else if (e.key === 'Escape') {
+        if (input.value) input.value = ''; else input.blur();
+        close();
+      }
+    });
+    document.addEventListener('mousedown', e => { if (box.style.display !== 'none' && !wrap.contains(e.target) && !box.contains(e.target)) close(); });
+    window.addEventListener('resize', () => { if (box.style.display !== 'none') place(); });
+    // "/" jumps to the search box from anywhere that is not a text field
+    document.addEventListener('keydown', e => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || isMobilePlayer()) return;
+      const t = e.target, tag = t && t.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
+      if (!wrap.offsetParent) return;
+      e.preventDefault();
+      input.focus(); input.select();
+    });
+  }
+
   function makeNavTab(className, svgPath, label, onClick) {
     const tab = document.createElement('div');
     tab.className = className + ' pressable';
@@ -7247,6 +8029,9 @@ render();
       nav.appendChild(tab);
     }
 
+    // Search box — just left of the log tab
+    buildNavSearch(nav);
+
     // autotagTT review tab — just right of Following
     if (!nav.querySelector('.autotag-tab')) {
       const tab = makeNavTab('autotag-tab',
@@ -7269,6 +8054,19 @@ render();
       if (listTabKind === 'library') tab.classList.add('active');
       const fol = nav.querySelector('.following');
       if (fol) fol.insertAdjacentElement('afterend', tab); else nav.appendChild(tab);
+    }
+
+    // For You picks tab: just left of Review
+    if (!nav.querySelector('.scout-tab')) {
+      const tab = makeNavTab('scout-tab',
+        '<path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/>',
+        'For You picks',
+        () => showScoutTab()
+      );
+      if (scoutTabActive) tab.classList.add('active');
+      const rev = nav.querySelector('.autotag-tab');
+      if (rev) rev.insertAdjacentElement('beforebegin', tab); else nav.appendChild(tab);
+      scoutBadge();
     }
 
     syncAuthorTabs();
@@ -7311,7 +8109,7 @@ render();
     }
     defaultViewShown = true;
     if (isMobilePlayer()) { setMobileTab('home'); return; }
-    if (!starsTabActive && !logTabActive && !autotagTabActive && !activeAuthorId) showStarsTab();
+    if (!starsTabActive && !logTabActive && !autotagTabActive && !scoutTabActive && !activeAuthorId) showStarsTab();
   }
 
   // ── Expose live API for pop-out windows ──────────────────────────────────
@@ -7575,7 +8373,7 @@ render();
 
 
       /* ── Stars & Player nav tabs ── */
-      nav .library-tab, nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab {
+      nav .library-tab, nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab, nav .scout-tab {
         display: flex; align-items: center;
         cursor: pointer; border-bottom: 3px solid transparent; color: inherit;
         white-space: nowrap;
@@ -7583,20 +8381,20 @@ render();
 
       /* ── Icon-only top nav (labels hidden; title tooltips added in JS) ── */
       nav { margin-left: 20px !important; }
-      nav .likes, nav .bookmarked, nav .following, nav .library-tab, nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab {
+      nav .likes, nav .bookmarked, nav .following, nav .library-tab, nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab, nav .scout-tab {
         font-size: 0 !important; gap: 0 !important;
         margin: 3.3px 2px 0 !important; padding: 0 14px !important;
         justify-content: center; border-radius: 6px 6px 0 0;
         transition: color .15s, background .15s;
       }
-      nav .likes svg, nav .bookmarked svg, nav .following svg, nav .library-tab svg, nav .stars-tab svg, nav .player-tab svg, nav .session-tab svg, nav .settings-tab svg, nav .log-tab svg, nav .autotag-tab svg {
+      nav .likes svg, nav .bookmarked svg, nav .following svg, nav .library-tab svg, nav .stars-tab svg, nav .player-tab svg, nav .session-tab svg, nav .settings-tab svg, nav .log-tab svg, nav .autotag-tab svg, nav .scout-tab svg {
         width: 20px !important; height: 20px !important; margin: 0 !important;
       }
       nav .likes:not(.active):hover, nav .bookmarked:not(.active):hover,
-      nav .following:not(.active):hover, nav .library-tab:not(.active):hover, nav .stars-tab:not(.active):hover, nav .player-tab:not(.active):hover, nav .session-tab:not(.menu-open):hover, nav .settings-tab:not(.active):hover, nav .log-tab:not(.active):hover, nav .autotag-tab:not(.active):hover {
+      nav .following:not(.active):hover, nav .library-tab:not(.active):hover, nav .stars-tab:not(.active):hover, nav .player-tab:not(.active):hover, nav .session-tab:not(.menu-open):hover, nav .settings-tab:not(.active):hover, nav .log-tab:not(.active):hover, nav .autotag-tab:not(.active):hover, nav .scout-tab:not(.active):hover {
         color: var(--active, #d7d7d7); background: rgba(255,255,255,.05);
       }
-      nav .likes.active, nav .bookmarked.active, nav .following.active, nav .library-tab.active, nav .stars-tab.active, nav .player-tab.active, nav .session-tab.menu-open, nav .settings-tab.active, nav .log-tab.active, nav .autotag-tab.active {
+      nav .likes.active, nav .bookmarked.active, nav .following.active, nav .library-tab.active, nav .stars-tab.active, nav .player-tab.active, nav .session-tab.menu-open, nav .settings-tab.active, nav .log-tab.active, nav .autotag-tab.active, nav .scout-tab.active {
         color: var(--active, #d7d7d7); background: rgba(255,255,255,.09);
         border-bottom: 3px solid var(--active, #d7d7d7); cursor: default;
       }
@@ -7618,7 +8416,27 @@ render();
         color: var(--active, #d7d7d7); background: rgba(255,255,255,.09);
         border-bottom: 3px solid var(--active, #d7d7d7); cursor: default;
       }
-      nav .log-tab { margin-left: auto !important; }
+      nav .log-tab { margin-left: 4px !important; }
+      /* search box: right-aligned, just left of the log tab */
+      nav .sp-nav-search { position: relative; display: flex; align-items: center; align-self: center; margin-left: auto; margin-right: 6px; }
+      nav .sp-nav-search svg { position: absolute; left: 9px; width: 14px; height: 14px; fill: #8a8a8a; pointer-events: none; }
+      nav .sp-nav-search input { width: 190px; height: 30px; box-sizing: border-box; padding: 0 10px 0 29px; border-radius: 15px;
+        border: 1px solid #3a3a3a; background: #1a1a1a; color: #e0e0e0; font: 13px/1 inherit; outline: none; transition: width .15s, border-color .15s; }
+      nav .sp-nav-search input::placeholder { color: #7a7a7a; }
+      nav .sp-nav-search input:focus { width: 280px; border-color: #5a8dcf; }
+      @media (max-width: 1100px) { nav .sp-nav-search input { width: 150px; } nav .sp-nav-search input:focus { width: 220px; } }
+      .sp-search-results { position: fixed; z-index: 9999; width: 380px; max-width: calc(100vw - 16px); max-height: min(70vh, 520px); overflow-y: auto;
+        background: #1f1f1f; border: 1px solid #444; border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.7); padding: 4px 0; font-size: 13px; color: #ddd; }
+      .sp-search-head { padding: 8px 12px 3px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #8a8a8a; }
+      .sp-search-note { padding: 8px 12px; color: #8a8a8a; font-size: 12px; }
+      .sp-search-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; }
+      .sp-search-row.sel { background: rgba(90,141,207,.22); }
+      .sp-search-row.dim { opacity: .55; }
+      .sp-search-row img { width: 28px; height: 50px; object-fit: cover; border-radius: 4px; background: #111; flex-shrink: 0; }
+      .sp-sr-main { font-weight: 600; color: #f0f0f0; white-space: nowrap; }
+      .sp-sr-id { font-family: ui-monospace, Menlo, monospace; font-weight: 500; font-size: 12px; }
+      .sp-sr-sub { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9a9a9a; }
+      .sp-sr-count { margin-left: auto; color: #8a8a8a; font-size: 12px; white-space: nowrap; }
       nav .stars-tab { order: -1; }
       /* the app keeps its own tab marked active underneath; hide that highlight while Stars is showing */
       nav:has(.stars-tab.active) .pressable.active:not(.stars-tab) {
@@ -7627,6 +8445,7 @@ render();
       }
       body.sp-log-open nav .pressable.active:not(.log-tab),
       body.sp-autotag-open nav .pressable.active:not(.autotag-tab),
+      body.sp-scout-open nav .pressable.active:not(.scout-tab),
       body.sp-author-open nav .pressable.active:not(.author-tab) {
         color: var(--inactive, rgb(160,160,160)) !important;
         background: none !important; border-bottom-color: transparent !important;
@@ -7650,9 +8469,9 @@ render();
         header:has(> nav) nav .session-tab  { right: calc(var(--left-padding, 20px) + 112px); }
       }
 
-      #autotag-view { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; position: relative; }
+      #autotag-view, #scout-view { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; position: relative; }
       /* two fixed rows that never wrap, so the cards below never move when the window or the status text changes */
-      #autotag-head { display: flex; flex-direction: column; gap: 6px; padding: 10px 18px 8px; flex-shrink: 0; border-bottom: 1px solid #333; }
+      #scout-head, #autotag-head { display: flex; flex-direction: column; gap: 6px; padding: 10px 18px 8px; flex-shrink: 0; border-bottom: 1px solid #333; }
       .at-row { display: flex; align-items: center; flex-wrap: nowrap; gap: 10px; height: 26px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
       .at-row::-webkit-scrollbar { display: none; }
       .at-row > * { flex-shrink: 0; white-space: nowrap; }
@@ -7661,9 +8480,48 @@ render();
       .at-modes { display: flex; gap: 6px; }
       .at-mode { background: rgba(255,255,255,.06); border: 1px solid #444; color: #999; border-radius: 12px; padding: 2px 10px; font-size: 12px; line-height: 18px; cursor: pointer; }
       .at-mode.on { color: #fff; background: rgba(255,255,255,.14); }
+      /* ── For You picks ── */
+      .sp-badge { position: absolute; top: 4px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: #2c7be5; color: #fff; font-size: 10px !important; font-weight: 700; line-height: 16px; text-align: center; pointer-events: none; }
+      nav .scout-tab .sp-badge { top: 6px; right: 4px; }
+      #sp-mobile-nav .sp-nav-btn .sp-badge { top: 4px; right: calc(50% - 20px); }
+      #scout-grid { flex: 1; overflow-y: auto; padding: 14px 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; align-content: start; grid-auto-rows: max-content; }
+      .scout-card { background: #181818; border: 1px solid #2c2c2c; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+      .scout-cover { position: relative; aspect-ratio: 9 / 14; background: #111; cursor: pointer; }
+      .scout-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .scout-cover.nocover img { visibility: hidden; }
+      .scout-cover.nocover::after { content: 'no cover'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #555; font-size: 12px; }
+      .scout-score { position: absolute; top: 6px; left: 6px; background: rgba(0,0,0,.68); color: #fff; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+      .scout-body { padding: 8px 10px 2px; display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+      .scout-author { font-weight: 600; font-size: 13px; color: #eee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .scout-desc { font-size: 12px; color: #9a9a9a; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .scout-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+      .scout-tag { font-size: 11px; padding: 1px 4px 1px 7px; border-radius: 9px; background: rgba(79,195,247,.14); color: #9ed8f0; white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; }
+      .scout-tag.right { background: rgba(76,175,80,.22); color: #a5d6a7; }
+      .scout-tag.wrong { background: rgba(244,67,54,.2); color: #ef9a9a; text-decoration: line-through; }
+      .scout-vote { border: 0; background: transparent; color: inherit; opacity: .45; cursor: pointer; font-size: 12px; padding: 0 3px; line-height: 1.4; }
+      .scout-vote:hover, .scout-vote.on { opacity: 1; }
+      .scout-card.opened { border-color: #2c7be5; }
+      .scout-opened { position: absolute; left: 6px; top: 6px; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px; background: #2c7be5; color: #fff; pointer-events: none; }
+      .scout-actions { display: flex; align-items: center; gap: 6px; padding: 8px 10px 10px; margin-top: auto; }
+      .scout-btn { flex: 1; background: rgba(255,255,255,.07); border: 1px solid #444; color: #ddd; border-radius: 14px; padding: 5px 4px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+      .scout-btn.primary { background: #2c5d8f; border-color: #3d79b5; color: #fff; }
+      .scout-status { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 8px 18px; font-size: 12px; color: #9a9a9a; border-bottom: 1px solid #2a2a2a; flex-shrink: 0; line-height: 1.45; }
+      .scout-status b { color: #ddd; font-weight: 600; }
+      .scout-status-text { flex: 1 1 200px; min-width: 0; }
+      .scout-status-nums, .scout-age { white-space: nowrap; color: #8a8a8a; }
+      .scout-dot { width: 9px; height: 9px; border-radius: 50%; background: #666; flex-shrink: 0; }
+      .scout-status.ok .scout-dot { background: #4caf50; box-shadow: 0 0 0 0 rgba(76,175,80,.6); animation: scoutPulse 2s infinite; }
+      .scout-status.rest .scout-dot { background: #4fc3f7; }
+      .scout-status.warn { background: rgba(255,193,7,.10); border-bottom-color: #5c4a10; color: #f1d27a; }
+      .scout-status.warn .scout-dot { background: #ffc107; }
+      .scout-status.warn b { color: #f1d27a; }
+      .scout-status.bad { background: rgba(244,67,54,.10); border-bottom-color: #6b2a25; color: #f0a39b; }
+      .scout-status.bad .scout-dot { background: #f44336; }
+      .scout-status.bad b { color: #f0a39b; }
+      @keyframes scoutPulse { 70% { box-shadow: 0 0 0 7px rgba(76,175,80,0); } 100% { box-shadow: 0 0 0 0 rgba(76,175,80,0); } }
       #autotag-grid { flex: 1; overflow-y: auto; padding: 14px 18px; display: grid; grid-template-columns: repeat(auto-fill,minmax(150px,1fr)); gap: 14px; align-content: start; }
       /* phone swipe review */
-      #at-swipe { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; }
+      #at-swipe, #scout-swipe { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; }
       .at-sw-stack { position: absolute; inset: 0; }
       .at-sw-card { position: absolute; inset: 0; background: #111; will-change: transform; touch-action: none; }
       .at-sw-card.behind { transform: scale(.96); opacity: .7; pointer-events: none; }
@@ -7691,6 +8549,9 @@ render();
       .sp-rail-btn.braces-on, .sp-rail-btn.rail-tag.active { color: #4fc3f7; }
       .at-sw-btns { position: absolute; left: 0; right: 0; bottom: 18px; z-index: 6; display: flex; justify-content: center; align-items: center; gap: 22px; pointer-events: none; }
       .at-sw-btn { pointer-events: auto; width: 62px; height: 62px; border-radius: 50%; border: 2px solid; background: rgba(0,0,0,.55); font-size: 28px; line-height: 1; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+      .at-sw-btn.open { width: 48px; height: 48px; font-size: 22px; color: #4fc3f7; border-color: #4fc3f7; }
+      .scout-sw-info { padding-right: 16px; }
+      .scout-sw-tags { margin-top: 8px; pointer-events: auto; }
       .at-sw-btn.reject { color: #f44336; border-color: #f44336; } .at-sw-btn.accept { color: #4caf50; border-color: #4caf50; }
       .at-sw-btn.unsure { width: 48px; height: 48px; font-size: 22px; color: #ffc107; border-color: #ffc107; }
       .at-sw-toast { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 7; background: rgba(30,30,30,.92); color: #eee; border-radius: 16px; padding: 6px 14px; font-size: 13px; display: none; white-space: nowrap; align-items: center; gap: 10px; }
@@ -7699,7 +8560,7 @@ render();
       .at-sw-done { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 30px; color: #999; font-size: 14px; line-height: 1.5; }
       #at-lowconf { padding: 8px 18px; background: rgba(79,195,247,.10); border-bottom: 1px solid #1d4e63; font-size: 12px; color: #9ed8f0; line-height: 1.45; flex-shrink: 0; }
       #at-restore { display: flex; align-items: center; gap: 10px; padding: 8px 18px; background: rgba(255,193,7,.12); border-bottom: 1px solid #5a4a10; font-size: 13px; flex-wrap: wrap; flex-shrink: 0; }
-      #autotag-msg { grid-column: 1 / -1; color: #888; text-align: center; padding: 40px 10px; font-size: 13px; line-height: 1.6; }
+      .scout-msg, #autotag-msg { grid-column: 1 / -1; color: #888; text-align: center; padding: 40px 10px; font-size: 13px; line-height: 1.6; }
       .at-score { position: absolute; bottom: 4px; left: 4px; background: rgba(0,0,0,.7); color: #ddd; border-radius: 8px; padding: 1px 7px; font-size: 11px; pointer-events: none; z-index: 2; }
       .sp-bubbles { position: absolute; left: 4px; right: 4px; bottom: 4px; z-index: 3; display: flex; flex-wrap: wrap; gap: 3px; align-items: flex-end; pointer-events: none; max-height: 70%; overflow: hidden; }
       .sp-bubble { pointer-events: auto; display: inline-flex; align-items: center; max-width: 100%; background: rgba(0,0,0,.72); color: #ddd; border-radius: 10px; padding: 1px 7px; font-size: 11px; line-height: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
@@ -7726,7 +8587,7 @@ render();
       .at-bar.run i { background-image: linear-gradient(90deg, rgba(255,255,255,.0), rgba(255,255,255,.25), rgba(255,255,255,.0)); background-size: 40px 100%; animation: at-shine 1.4s linear infinite; background-color: #4fc3f7; }
       .at-bar b { position: absolute; top: 0; bottom: 0; width: 2px; background: #ffc107; }
       @keyframes at-shine { from { background-position: -40px 0; } to { background-position: 160px 0; } }
-      nav .autotag-tab, #sp-mobile-nav .sp-nav-btn { position: relative; }
+      nav .autotag-tab, nav .scout-tab, #sp-mobile-nav .sp-nav-btn { position: relative; }
       .sp-prog { position: absolute; left: 0; bottom: 0; height: 3px; background: #4fc3f7; border-radius: 2px; pointer-events: none; transition: width .6s; max-width: 100%; }
       #sp-sync-note { position: fixed; left: 12px; bottom: 12px; z-index: 99999; max-width: min(420px, calc(100vw - 24px)); background: #1e1e1e; border: 1px solid #555; color: #ddd; border-radius: 8px; padding: 8px 12px; font-size: 12px; line-height: 1.4; box-shadow: 0 4px 20px rgba(0,0,0,.7); cursor: pointer; display: none; }
       #sp-sync-note.warn { border-color: #f44336; background: #3a1a1a; color: #ffb4a8; }
@@ -7861,9 +8722,11 @@ render();
       .thumb-tool.braces-on { color: #4fc3f7; }
       @media (hover: none) { .thumb-tool { opacity: .9; } }
       @media (max-width: 768px) {
-        #autotag-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 500; background: #0d0d0d; }
-        #autotag-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 8px; }
-        #autotag-head { padding: 8px 10px; }
+        #autotag-view, #scout-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 500; background: #0d0d0d; }
+        #autotag-grid, #scout-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 8px; }
+        .scout-status { padding: 8px 10px; }
+        #autotag-head, #scout-head { padding: 8px 10px; }
+        #scout-head .stars-main-title { display: none; }      /* the tab bar already says it; leaves room for Grid and Refresh */
         #author-view { position: fixed; inset: 0; bottom: calc(var(--sp-nav-base, 56px) + var(--sp-safe-b, 0px)); z-index: 3500; background: #0d0d0d; }
         .author-view-close { display: none; }   /* swipe right (or the browser's back) closes the page */
         /* the controls (play, size, sort buttons) get their own row under the title */
@@ -8555,7 +9418,7 @@ render();
 
         /* every full-screen view stops at the tab bar and keeps clear of the notch */
         #player-view { bottom: var(--sp-nav-h) !important; background: #000; }
-        #author-view, #autotag-view, #recents-grid-view { bottom: var(--sp-nav-h) !important; padding-top: var(--sp-top); box-sizing: border-box; }
+        #author-view, #autotag-view, #scout-view, #recents-grid-view { bottom: var(--sp-nav-h) !important; padding-top: var(--sp-top); box-sizing: border-box; }
         #stars-view { bottom: var(--sp-nav-h) !important; padding-top: var(--sp-top) !important; box-sizing: border-box; }
         #author-view { border-left: 1px solid rgba(255,255,255,.08); }
 

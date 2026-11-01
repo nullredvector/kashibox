@@ -24,12 +24,13 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 ### Organize
 - **Hide videos:** a Hide button on every thumbnail, in the player and in the phone feed takes a video out of every list, the Home feed and the TV (with an Undo). Nothing is deleted, and **Settings → Hidden videos** shows them and brings them back.
 - **Groups as tags:** a video can be in any number of groups. The same groups drive filtering, the phone tagging UI and the feed ranking.
-- **Sorting and sizing:** Added, Latest, Popular or Oldest, plus a thumbnail size slider, on every grid.
+- **Sorting and sizing:** Added, Latest, Popular or Oldest, plus a thumbnail size slider, on every grid. The Stars grid also has Newest, which puts the most recently starred videos first (stars saved before this was added follow in the order they were saved).
 - **Hover and play-all previews:** mouse over a thumbnail to preview it, or play every visible thumbnail at once.
 - **Built for big archives:** grids are filled in chunks as you scroll, so a collection with tens of thousands of videos stays responsive.
 
 ### Browse by creator
 - **Username tabs:** click a creator's name anywhere to open all of their videos in a tab of their own. Double-click a tab to open that account's profile page, if you have set a profile link in Settings (an address with `{username}` in it). With a profile link set, desktop tabs also check whether the account still exists and show its name in red when it doesn't (including accounts whose profile page says it couldn't find them). Your server makes that check (never the browser) and caches the answer for 12 hours.
+- **Search:** the box in the top bar (press `/` to jump to it) finds creators by username or display name and videos by id or file name; Enter opens the first result.
 - **Tab sessions:** open tabs are saved automatically as sessions you can restore, rename or delete later.
 - **Player window:** a pop-out player that doesn't disturb the tab you are on, with the same star, tag and number tools.
 
@@ -43,6 +44,7 @@ kashibox is a complete app: it serves its own page, so there is nothing else to 
 ### Smarter feed
 - **Watch log:** the phone feed notes how long each video is watched and whether you skip it quickly. It is stored only in your archive folder.
 - **Ranker:** orders the Home feed from stars, numbers, group membership and size, like counts and the watch log, and gives videos you have just seen a cooldown. It only ever sees ids and numbers, never what a tag is called.
+- **For You picks:** the **For You** tab (left of Review) shows videos a scout on your server suggests from the For You feed, judged by the tags you taught the AI tagger. You open a pick and like it yourself, or skip it; nothing is ever liked for you, and the scout is off until you turn it on in Settings. How it works: [docs/scout](docs/scout/README.md).
 - **Review page:** suggestions from the optional **autotagTT** companion (local machine-learning tag suggestions) show up in a Review tab where you accept or reject them.
 
 ### Ops
