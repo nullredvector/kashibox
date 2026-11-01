@@ -790,9 +790,10 @@ http.createServer((req, res) => {
       return;
     }
     if (pathname === '/api/library/files' && req.method === 'GET') {
-      const files = library.listFiles(String(q.dir || ''));
-      if (!files) return sendJson(404, { error: 'Not a library folder' });
-      sendJson(200, { files });
+      library.listFiles(String(q.dir || '')).then(r => {
+        if (r.error) return sendJson(404, { error: r.error });
+        sendJson(200, { files: r.files });
+      }).catch(() => sendJson(500, { error: 'UNKNOWN' }));
       return;
     }
     if (pathname === '/api/library' && req.method === 'POST') {
