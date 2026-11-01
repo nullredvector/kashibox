@@ -1715,9 +1715,12 @@
       };
       const load = () => {
         list.textContent = 'Reading the folder…'; picked = new Set(); paintBtn();
-        fetch('/api/library/files?dir=' + encodeURIComponent(sel.value), { cache: 'no-store' }).then(r => (r.ok ? r.json() : Promise.reject()))
-          .then(d => { files = d.files.sort((a, b) => a.rel.localeCompare(b.rel, undefined, { numeric: true })); paint(); })
-          .catch(() => { list.textContent = 'That folder cannot be read.'; });
+        fetch('/api/library/files?dir=' + encodeURIComponent(sel.value), { cache: 'no-store' }).then(r => r.json().catch(() => ({ error: 'HTTP ' + r.status })))
+          .then(d => {
+            if (!d.files) { list.textContent = 'That folder cannot be read (' + (d.error || 'no answer') + ').'; return; }
+            files = d.files.sort((a, b) => a.rel.localeCompare(b.rel, undefined, { numeric: true })); paint();
+          })
+          .catch(() => { list.textContent = 'The server did not answer (a very large folder can take a while). Try again.'; });
       };
       sel.addEventListener('change', load);
       let t = null; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(paint, 150); });

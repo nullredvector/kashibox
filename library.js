@@ -69,37 +69,52 @@ function browse(p) {
   return { root: ROOT, path: dir, parent: dir === ROOT ? null : path.dirname(dir), dirs, videos };
 }
 
-// Every video below a source folder (limited depth and count)
-function walk(dir) {
+// Every video below a source folder (limited depth and count). Asynchronous, so a big folder never blocks the server;
+// a file is trusted by its place in the walk (links to folders are not followed), only a linked file is resolved.
+async function walk(dir) {
   const out = [];
   const seen = new Set();
-  (function go(d, depth) {
+  const pending = [];
+  const go = async (d, depth) => {
     if (out.length >= MAX_FILES || depth > MAX_DEPTH || seen.has(d)) return;
     seen.add(d);
     let entries = [];
-    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+    try { entries = await fs.promises.readdir(d, { withFileTypes: true }); } catch (e) { if (depth === 0) throw e; return; }
     for (const e of entries) {
       if (e.name.startsWith('.') || out.length >= MAX_FILES) continue;
       const full = path.join(d, e.name);
-      if (e.isDirectory()) { go(full, depth + 1); continue; }
-      if (!VIDEO_EXT.test(e.name)) continue;
-      const r = safe(full);
-      if (!r) continue;
-      let st; try { st = fs.statSync(r); } catch (_) { continue; }
-      if (st.isFile()) out.push({ path: r, rel: path.relative(dir, full), size: st.size, mtime: Math.floor(st.mtimeMs) });
+      if (e.isDirectory()) { await go(full, depth + 1); continue; }
+      if (!VIDEO_EXT.test(e.name) || !(e.isFile() || e.isSymbolicLink())) continue;
+      pending.push(full);
+      out.push(null);
     }
-  })(dir, 0);
+  };
+  await go(dir, 0);
+  out.length = 0;
+  // sizes, a few hundred at a time
+  for (let i = 0; i < pending.length; i += 200) {
+    await Promise.all(pending.slice(i, i + 200).map(async full => {
+      try {
+        const r = await fs.promises.realpath(full);
+        if (PSEUDO.some(x => within(r, x))) return;
+        const st = await fs.promises.stat(r);
+        if (st.isFile()) out.push({ path: r, rel: path.relative(dir, full), size: st.size });
+      } catch (_) {}
+    }));
+  }
   return out;
 }
 
 function sourceDirs() { return load().dirs.filter(d => safe(d)); }
 
-function listFiles(dir) {
+// -> { files } | { error: <system error code> }   (codes only; never a name)
+async function listFiles(dir) {
   const d = safe(dir);
-  if (!d || !load().dirs.includes(d)) return null;
-  const items = load().items;
-  const inLib = new Set(Object.values(items).map(x => x.path));
-  return walk(d).map(f => ({ path: f.path, rel: f.rel, size: f.size, added: inLib.has(f.path) }));
+  if (!d || !load().dirs.includes(d)) return { error: 'NOT_A_LIBRARY_FOLDER' };
+  const inLib = new Set(Object.values(load().items).map(x => x.path));
+  let files;
+  try { files = await walk(d); } catch (e) { return { error: (e && e.code) || 'UNKNOWN' }; }
+  return { files: files.map(f => ({ path: f.path, rel: f.rel, size: f.size, added: inLib.has(f.path) })) };
 }
 
 function addDir(dir) {
