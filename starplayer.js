@@ -1735,11 +1735,20 @@
       noneBtn.addEventListener('click', () => { picked.clear(); paint(); });
       addBtn.addEventListener('click', () => {
         addBtn.disabled = true;
-        libPost({ addFiles: [...picked] }).then(r => {
-          if (r.error) { spToast(r.error); paintBtn(); return; }
-          spToast(`Added ${r.added} video${r.added !== 1 ? 's' : ''} to the library`);
-          load();
-        });
+        // in batches, so a very large selection never makes one oversized request
+        const all = [...picked];
+        let total = 0, failed = '';
+        const step = i => {
+          if (i >= all.length || failed) {
+            if (failed) spToast(failed);
+            else spToast(`Added ${total.toLocaleString()} video${total !== 1 ? 's' : ''} to the library`);
+            load();
+            return;
+          }
+          addBtn.textContent = `Adding ${Math.min(i, all.length).toLocaleString()} / ${all.length.toLocaleString()}…`;
+          libPost({ addFiles: all.slice(i, i + 3000) }).then(r => { if (r.error) failed = r.error; else total += r.added; step(i + 3000); });
+        };
+        step(0);
       });
       load();
     });
@@ -8784,11 +8793,11 @@ render();
       .lib-dirs { margin-bottom: 10px; }
       .lib-dir-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; color: #ccc; word-break: break-all; }
       .lib-dir-row span { flex: 1; min-width: 0; }
-      #sp-lib-dlg { position: fixed; inset: 0; z-index: 100000; background: rgba(0,0,0,.94); display: flex; flex-direction: column; color: #ddd; }
-      #sp-lib-dlg .hm-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #444; flex-wrap: wrap; }
+      #sp-lib-dlg { position: fixed; inset: 0; z-index: 100000; background: #0d0d0d; display: flex; flex-direction: column; color: #ddd; }
+      #sp-lib-dlg .hm-head { display: flex; align-items: center; gap: 10px; padding: calc(env(safe-area-inset-top, 0px) + 14px) calc(env(safe-area-inset-right, 0px) + 16px) 14px calc(env(safe-area-inset-left, 0px) + 16px); border-bottom: 1px solid #444; flex-wrap: wrap; flex-shrink: 0; }
       #sp-lib-dlg .hm-title { font-size: 18px; font-weight: 600; flex: 1; min-width: 140px; }
       #sp-lib-dlg .hm-note { color: #aaa; font-size: 13px; padding: 8px 4px; }
-      .lib-dlg-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px; gap: 8px; }
+      .lib-dlg-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px calc(env(safe-area-inset-right, 0px) + 16px) calc(env(safe-area-inset-bottom, 0px) + 12px) calc(env(safe-area-inset-left, 0px) + 16px); gap: 8px; }
       .lib-crumb { font-size: 13px; color: #aaa; word-break: break-all; }
       .lib-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
       .lib-row { text-align: left; background: rgba(255,255,255,.06); border: none; border-radius: 6px; color: #ddd; padding: 10px 12px; font-size: 14px; cursor: pointer; }

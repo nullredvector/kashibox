@@ -20,7 +20,7 @@ const FILE        = path.join(APPDATA, 'library.json');
 const COVER_DIR   = path.join(APPDATA, 'library-covers');
 
 const VIDEO_EXT   = /\.(mp4|m4v|mov|webm)$/i;
-const MAX_FILES   = 20000;
+const MAX_FILES   = 100000;
 const MAX_DEPTH   = 8;
 
 const within = (p, base) => base === path.sep || p === base || p.startsWith(base + path.sep);
