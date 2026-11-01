@@ -107,14 +107,41 @@ async function walk(dir) {
 
 function sourceDirs() { return load().dirs.filter(d => safe(d)); }
 
-// -> { files } | { error: <system error code> }   (codes only; never a name)
-async function listFiles(dir) {
+// ── The index: what a source folder held when it was last scanned, kept in the appdata folder ──
+// Choosing a folder reads this instead of walking the disk; "Update index" (refresh) scans again on demand.
+const INDEX_FILE = path.join(APPDATA, 'library-index.json');
+const scanning = new Map();   // folder -> Promise (a scan in progress is shared)
+function loadIndex() { try { const d = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); return d && typeof d === 'object' ? d : {}; } catch (_) { return {}; } }
+function saveIndex(d) {
+  fs.mkdirSync(APPDATA, { recursive: true });
+  const tmp = INDEX_FILE + '.' + process.pid + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(d), { mode: 0o600 });
+  fs.renameSync(tmp, INDEX_FILE);
+}
+
+function scan(d) {
+  if (scanning.has(d)) return scanning.get(d);
+  const p = walk(d).then(files => {
+    // only a file reached through a link keeps its own resolved path
+    const entry = { at: Date.now(), files: files.map(f => (f.path === path.join(d, f.rel) ? { r: f.rel, s: f.size } : { r: f.rel, s: f.size, p: f.path })) };
+    const idx = loadIndex();
+    idx[d] = entry;
+    saveIndex(idx);
+    return entry;
+  }).finally(() => scanning.delete(d));
+  scanning.set(d, p);
+  return p;
+}
+
+// -> { files, indexedAt } | { error: <system error code> }   (codes only; never a name)
+// The index is scanned the first time a folder is used, or when refresh is true.
+async function listFiles(dir, refresh) {
   const d = safe(dir);
   if (!d || !load().dirs.includes(d)) return { error: 'NOT_A_LIBRARY_FOLDER' };
+  let entry = refresh ? null : loadIndex()[d];
+  if (!entry) { try { entry = await scan(d); } catch (e) { return { error: (e && e.code) || 'UNKNOWN' }; } }
   const inLib = new Set(Object.values(load().items).map(x => x.path));
-  let files;
-  try { files = await walk(d); } catch (e) { return { error: (e && e.code) || 'UNKNOWN' }; }
-  return { files: files.map(f => ({ path: f.path, rel: f.rel, size: f.size, added: inLib.has(f.path) })) };
+  return { indexedAt: entry.at, files: entry.files.map(f => { const p = f.p || path.join(d, f.r); return { path: p, rel: f.r, size: f.s, added: inLib.has(p) }; }) };
 }
 
 function addDir(dir) {
@@ -130,6 +157,7 @@ function removeDir(dir) {
   const cur = load();
   cur.dirs = cur.dirs.filter(x => x !== dir);
   save(cur);
+  try { const idx = loadIndex(); if (idx[dir]) { delete idx[dir]; saveIndex(idx); } } catch (_) {}
   return cur.dirs;
 }
 
