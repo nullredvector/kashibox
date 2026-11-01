@@ -5340,10 +5340,27 @@ function showGrpPicker(btn,id){
   setTimeout(()=>{document.addEventListener('click',function h(e){if(!p.contains(e.target)){closePicker();document.removeEventListener('click',h);}});},0);
 }
 
+// Keep the window shaped like the video that is playing: the width stays, the height follows the video's aspect ratio
+// (a very tall or wide video is limited to what the screen allows, narrowing the other side instead)
+function fitWin(){
+  const vw=v.videoWidth, vh=v.videoHeight; if(!vw||!vh) return;
+  try{
+    const fw=window.outerWidth-window.innerWidth, fh=window.outerHeight-window.innerHeight;
+    const maxW=Math.floor(screen.availWidth*0.9)-fw, maxH=Math.floor(screen.availHeight*0.9)-fh;
+    let w=window.innerWidth, h=Math.round(w*vh/vw);
+    if(h>maxH){h=maxH; w=Math.round(h*vw/vh);}
+    if(w>maxW){w=maxW; h=Math.round(w*vh/vw);}
+    if(Math.abs(w-window.innerWidth)>2||Math.abs(h-window.innerHeight)>2) window.resizeTo(w+fw,h+fh);
+  }catch(_){}
+}
+let fitTimer=null;
+window.addEventListener('resize',()=>{clearTimeout(fitTimer);fitTimer=setTimeout(fitWin,250);});
+
 function render(){
   closePicker();
   v.pause();
   const item=vids[idx]; if(!item)return;
+  v.onloadedmetadata=fitWin;
   v.poster=item.coverSrc; v.src=item.videoPath; v.muted=muted;
   v.play().catch(()=>{});
   v.onended=()=>{v.currentTime=0;v.play().catch(()=>{});};
