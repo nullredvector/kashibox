@@ -4785,6 +4785,7 @@
         if (!w || !h || !fw || !fh) return;
         const a = fw / w, b = fh / h;
         slide.classList.toggle('sp-fill', Math.max(a, b) / Math.min(a, b) <= 1.25);
+        slide.classList.toggle('sp-wide', w / h > 1.05);   // landscape clips sit in the middle of the screen, not pinned to the top
       };
       cover.addEventListener('load', () => fit(cover.naturalWidth, cover.naturalHeight));
       video.addEventListener('loadedmetadata', () => fit(video.videoWidth, video.videoHeight));
@@ -9446,6 +9447,7 @@ render();
         #player-feed { background: #000; }
         /* never crop or stretch: the video keeps its own aspect ratio, pinned to the very top of the screen */
         #player-view .player-video, #player-view .player-cover { object-fit: contain; object-position: center top; }
+        #player-view .player-slide.sp-wide .player-video, #player-view .player-slide.sp-wide .player-cover { object-position: center center; }
         .player-cover { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; transition: opacity .12s; }
         .player-cover.gone { opacity: 0; }
         .player-slide.sp-paused::before {
