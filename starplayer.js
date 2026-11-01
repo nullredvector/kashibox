@@ -4946,6 +4946,9 @@
       const h = feed.clientHeight;
       if (n < 20 || !h) return;
       const slides = [...feed.children].slice(0, n);
+      // the new scroll position is worked out before anything is removed: near the end of a list the browser clamps the
+      // position by itself once the slides are gone, and subtracting afterwards would throw the feed onto an earlier video
+      const keepTop = Math.max(0, feed.scrollTop - n * h);
       slides.forEach(sl => {
         if (io) io.unobserve(sl);
         const v = sl.querySelector('video');
@@ -4955,7 +4958,7 @@
       videoEls.splice(0, n); coverEls.splice(0, n); renderList.splice(0, n);
       winStart += n; playerWinStart = winStart;
       feed.style.scrollSnapType = 'none';
-      feed.scrollTop = Math.max(0, feed.scrollTop - n * h);
+      feed.scrollTop = keepTop;
       [...feed.children].forEach((sl, i) => { sl.dataset.idx = i; });
       requestAnimationFrame(() => { feed.style.scrollSnapType = ''; });
     }
