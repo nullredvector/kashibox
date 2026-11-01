@@ -914,7 +914,7 @@
     const p = pip; pip = null;
     try { p.video.pause(); p.video.removeAttribute('src'); p.video.load(); } catch (_) {}
     p.video.remove();
-    try { if (navigator.mediaSession) ['previoustrack', 'nexttrack'].forEach(a => navigator.mediaSession.setActionHandler(a, null)); } catch (_) {}
+    if (navigator.mediaSession) ['previoustrack', 'nexttrack', 'togglemicrophone'].forEach(a => { try { navigator.mediaSession.setActionHandler(a, null); } catch (_) {} });
   }
   function pipStep(dir) {
     if (!pip) return;
@@ -954,12 +954,17 @@
     v.loop = true;
     pip = { video: v, list, idx };
     v.addEventListener('leavepictureinpicture', pipEnd, { once: true });
-    try {
-      if (navigator.mediaSession) {
-        navigator.mediaSession.setActionHandler('previoustrack', idx > 0 ? () => pipStep(-1) : null);
-        navigator.mediaSession.setActionHandler('nexttrack', list.length > 1 ? () => pipStep(1) : null);
-      }
-    } catch (_) {}
+    if (navigator.mediaSession) {
+      const ms = navigator.mediaSession;
+      const set = (a, fn) => { try { ms.setActionHandler(a, fn); } catch (_) {} };
+      set('previoustrack', idx > 0 ? () => pipStep(-1) : null);
+      set('nexttrack', list.length > 1 ? () => pipStep(1) : null);
+      // The floating window has no mute button of its own. Its microphone button (a video-call control) is used as the
+      // sound switch: "microphone on" = sound on.
+      const paintMic = () => { try { ms.setMicrophoneActive && ms.setMicrophoneActive(!v.muted); } catch (_) {} };
+      set('togglemicrophone', () => { v.muted = !v.muted; overlayMuted = v.muted; paintMic(); });
+      paintMic();
+    }
     closeVideoOverlay();
   }
 
