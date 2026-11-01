@@ -1721,14 +1721,26 @@
         }
         paintBtn();
       };
+      let loadSeq = 0;
       const load = refresh => {
-        list.textContent = refresh ? 'Scanning the folder…' : 'Reading the index…'; picked = new Set(); limit = 300; paintBtn(); refBtn.disabled = true;
-        fetch('/api/library/files?dir=' + encodeURIComponent(sel.value) + (refresh ? '&refresh=1' : ''), { cache: 'no-store' }).then(r => r.json().catch(() => ({ error: 'HTTP ' + r.status })))
-          .then(d => {
-            if (!d.files) { list.textContent = 'That folder cannot be read (' + (d.error || 'no answer') + ').'; return; }
+        const seq = ++loadSeq;
+        picked = new Set(); limit = 300; paintBtn(); refBtn.disabled = true;
+        // a first read or an update scans the folder in the background; poll until the index is ready
+        const ask = rf => fetch('/api/library/files?dir=' + encodeURIComponent(sel.value) + (rf ? '&refresh=1' : ''), { cache: 'no-store' })
+          .then(r => r.json().catch(() => ({ error: 'HTTP ' + r.status })).then(d => ({ status: r.status, d })))
+          .then(({ status, d }) => {
+            if (seq !== loadSeq || !list.isConnected) return;
+            if (d.scanning) {
+              list.textContent = `Scanning the folder… ${(d.found || 0).toLocaleString()} videos found so far. This can take a while for a very large folder.`;
+              setTimeout(() => { if (seq === loadSeq) ask(false); }, 1500);
+              return;
+            }
+            if (!d.files) { list.textContent = 'That folder cannot be read (' + (d.error || 'HTTP ' + status) + ').'; refBtn.disabled = false; return; }
             files = d.files.sort((a, b) => a.rel.localeCompare(b.rel, undefined, { numeric: true })); indexedAt = d.indexedAt || 0; refBtn.disabled = false; paint();
           })
-          .catch(() => { list.textContent = 'The server did not answer (a very large folder can take a while). Try again.'; });
+          .catch(() => { if (seq === loadSeq) { list.textContent = 'The server did not answer. Try Update index again.'; refBtn.disabled = false; } });
+        list.textContent = refresh ? 'Starting the scan…' : 'Reading the index…';
+        ask(refresh);
       };
       sel.addEventListener('change', () => load());
       refBtn.addEventListener('click', () => load(true));
