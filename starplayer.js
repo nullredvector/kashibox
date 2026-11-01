@@ -775,23 +775,69 @@
       if (e.target === overlayEl) closeVideoOverlay();
     });
 
-    // Close button
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'overlay-close';
-    closeBtn.textContent = '✕';
-    closeBtn.addEventListener('click', closeVideoOverlay);
-    overlayEl.appendChild(closeBtn);
+    // Top bar: position in the list on the left; pop out, sound and close on the right
+    const top = document.createElement('div');
+    top.className = 'overlay-topbar ov-fade';
+    const count = document.createElement('div');
+    count.className = 'overlay-counter';
+    const tools = document.createElement('div');
+    tools.className = 'overlay-tools';
+    const mkTool = (cls, title, html, fn) => {
+      const b = document.createElement('button');
+      b.className = 'overlay-tool ' + cls; b.title = title; b.innerHTML = html;
+      b.addEventListener('click', e => { e.stopPropagation(); fn(b); });
+      tools.appendChild(b);
+      return b;
+    };
+    mkTool('overlay-popout-btn', 'Open in a new window (P)', POPOUT_SVG, () => overlayPopOut());
+    const topMute = mkTool('overlay-mute-btn', 'Sound (M)', muteIcon(overlayMuted), () => overlayToggleMute());
+    mkTool('overlay-close', 'Close (Esc)', '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>', closeVideoOverlay);
+    top.append(count, tools);
+    overlayEl.appendChild(top);
+    overlayEl._count = count;
+    overlayEl._muteBtn = topMute;
 
-    // Content container
+    // Previous / next, at the sides
+    ['prev', 'next'].forEach(k => {
+      const b = document.createElement('button');
+      b.className = 'overlay-arrow ov-fade overlay-arrow-' + k;
+      b.title = k === 'prev' ? 'Previous (↑)' : 'Next (↓)';
+      b.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="' + (k === 'prev' ? 'M7.41 15.41 12 10.83l4.59 4.58L18 14l-6-6-6 6z' : 'M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z') + '"/></svg>';
+      b.addEventListener('click', e => { e.stopPropagation(); navigateOverlay(k === 'prev' ? -1 : 1); });
+      overlayEl.appendChild(b);
+      overlayEl['_' + k] = b;
+    });
+
+    // The stage: sized to the video's own shape, as large as fits the window
     const content = document.createElement('div');
     content.id = 'video-overlay-content';
     overlayEl.appendChild(content);
 
+    // Controls fade out while the mouse is still
+    let idleTimer = null;
+    const wake = () => {
+      overlayEl && overlayEl.classList.remove('idle');
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => { if (overlayEl && overlayVideo && !overlayVideo.paused && !document.querySelector('.picker, .sp-sheet')) overlayEl.classList.add('idle'); }, 2600);
+    };
+    overlayEl.addEventListener('mousemove', wake);
+    overlayEl.addEventListener('mousedown', wake);
+    overlayEl._wake = wake;
+    overlayEl._stop = () => clearTimeout(idleTimer);
+    const onResize = () => fitOverlayStage();
+    window.addEventListener('resize', onResize);
+    overlayEl._onResize = onResize;
+
     // Keyboard
     overlayEl.addEventListener('keydown', e => {
+      wake();
+      if (e.target && /^(input|textarea|select)$/i.test(e.target.tagName)) return;
       if (e.key === 'Escape') { closeVideoOverlay(); return; }
       if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { navigateOverlay(1); return; }
       if (e.key === 'ArrowUp'   || e.key === 'ArrowLeft')  { navigateOverlay(-1); return; }
+      if (e.key === ' ' || e.key === 'k') { e.preventDefault(); overlayVideo && (overlayVideo.paused ? overlayVideo.play().catch(() => {}) : overlayVideo.pause()); return; }
+      if (e.key === 'm') { overlayToggleMute(); return; }
+      if (e.key === 'p') { overlayPopOut(); return; }
     });
 
     // Swipe / tap (mobile)
@@ -816,6 +862,8 @@
   function closeVideoOverlay() {
     if (!overlayEl) return;
     if (overlayVideo) { overlayVideo.pause(); overlayVideo.src = ''; }
+    if (overlayEl._onResize) window.removeEventListener('resize', overlayEl._onResize);
+    if (overlayEl._stop) overlayEl._stop();
     overlayEl.remove();
     overlayEl = null;
     overlayVideo = null;
@@ -835,6 +883,36 @@
     renderOverlayContent();
   }
 
+  const POPOUT_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>';
+
+  // Size the stage to the video's own shape, as large as the window allows (room is left for the side arrows and the top bar)
+  function fitOverlayStage(w, h) {
+    if (!overlayEl) return;
+    const content = overlayEl.querySelector('#video-overlay-content');
+    if (!content) return;
+    if (w && h) overlayEl._dim = { w, h };
+    const d = overlayEl._dim || { w: 9, h: 16 };
+    const side = window.innerWidth < 900 ? 16 : 84;
+    const aw = Math.max(200, window.innerWidth - 2 * side), ah = Math.max(200, window.innerHeight - 2 * 56);
+    const k = Math.min(aw / d.w, ah / d.h);
+    content.style.width = Math.round(d.w * k) + 'px';
+    content.style.height = Math.round(d.h * k) + 'px';
+  }
+
+  function overlayToggleMute() {
+    overlayMuted = !overlayMuted;
+    if (overlayVideo) overlayVideo.muted = overlayMuted;
+    if (overlayEl && overlayEl._muteBtn) overlayEl._muteBtn.innerHTML = muteIcon(overlayMuted);
+  }
+
+  // Open the video that is showing in its own window, shaped like the video
+  function overlayPopOut() {
+    if (!overlayEl) return;
+    const list = overlayCtx, idx = overlayIdx, dim = overlayEl._dim;
+    closeVideoOverlay();
+    popoutPlayer(list, idx, dim);
+  }
+
   function renderOverlayContent() {
     if (!overlayEl) return;
     const content = overlayEl.querySelector('#video-overlay-content');
@@ -851,17 +929,33 @@
     const authorName = info.authorName || item.authorName || '';
     const desc = info.desc || item.desc || '';
 
+    if (overlayEl._count) overlayEl._count.textContent = overlayCtx.length > 1 ? `${overlayIdx + 1} / ${overlayCtx.length}` : '';
+    if (overlayEl._prev) overlayEl._prev.disabled = overlayIdx <= 0;
+    if (overlayEl._next) overlayEl._next.disabled = overlayIdx >= overlayCtx.length - 1;
+    if (overlayEl._muteBtn) overlayEl._muteBtn.innerHTML = muteIcon(overlayMuted);
+    overlayEl.classList.remove('idle');
+    if (overlayEl._wake) overlayEl._wake();
+
+    // The stage takes the cover's shape right away and the video's own once it is known
+    fitOverlayStage();
+    const probe = new Image();
+    probe.onload = () => { if (overlayVideo === video && !video.videoWidth) fitOverlayStage(probe.naturalWidth, probe.naturalHeight); };
+    probe.src = item.coverSrc;
+
     // Video
     const video = document.createElement('video');
     video.src = item.videoPath;
     video.muted = overlayMuted;
     video.autoplay = true;
+    video.loop = true;
     video.playsInline = true;
     video.poster = item.coverSrc;
     video.className = 'overlay-video';
     video.addEventListener('playing', () => { video.poster = ''; }, { once: true });
-    video.addEventListener('ended', () => { video.currentTime = 0; video.play().catch(() => {}); });
+    video.addEventListener('loadedmetadata', () => fitOverlayStage(video.videoWidth, video.videoHeight));
     video.addEventListener('contextmenu', e => { e.preventDefault(); video.paused ? video.play().catch(() => {}) : video.pause(); });
+    // a click on the picture pauses or resumes (touch screens use the tap handler on the overlay)
+    video.addEventListener('pointerup', e => { if (e.pointerType === 'mouse' && e.button === 0) video.paused ? video.play().catch(() => {}) : video.pause(); });
     content.appendChild(video);
     overlayVideo = video;
 
@@ -869,9 +963,9 @@
     const controls = document.createElement('div');
     controls.className = 'overlay-controls-layer';
 
-    // Right center: star + group
+    // Right center: star, braces, number, group, hide
     const rightCenter = document.createElement('div');
-    rightCenter.className = 'overlay-right-center';
+    rightCenter.className = 'overlay-right-center ov-fade';
 
     const starBtn = document.createElement('button');
     starBtn.className = 'overlay-ctrl-btn overlay-star-btn';
@@ -910,7 +1004,7 @@
 
     // Bottom-left: author + caption
     const meta = document.createElement('div');
-    meta.className = 'overlay-meta';
+    meta.className = 'overlay-meta ov-fade';
     if (authorName) {
       const authEl = document.createElement('div');
       authEl.className = 'overlay-author';
@@ -925,46 +1019,34 @@
     }
     controls.appendChild(meta);
 
-    // Bottom-right: mute
-    const muteBtn = document.createElement('button');
-    muteBtn.className = 'overlay-ctrl-btn overlay-mute-btn';
-    muteBtn.innerHTML = muteIcon(overlayMuted);
-    muteBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      overlayMuted = !overlayMuted;
-      video.muted = overlayMuted;
-      muteBtn.innerHTML = muteIcon(overlayMuted);
-    });
-    controls.appendChild(muteBtn);
-
-    // Counter (subtle)
-    if (overlayCtx.length > 1) {
-      const counter = document.createElement('div');
-      counter.className = 'overlay-counter';
-      counter.textContent = `${overlayIdx + 1} / ${overlayCtx.length}`;
-      controls.appendChild(counter);
-    }
-
-    // Bottom-center: prev / next nav buttons
-    if (overlayCtx.length > 1) {
-      const navDiv = document.createElement('div');
-      navDiv.className = 'overlay-nav-btns';
-      const prevNavBtn = document.createElement('button');
-      prevNavBtn.className = 'overlay-ctrl-btn overlay-nav-btn';
-      prevNavBtn.innerHTML = '&#8679;';
-      prevNavBtn.title = 'Previous';
-      prevNavBtn.disabled = overlayIdx <= 0;
-      prevNavBtn.addEventListener('click', e => { e.stopPropagation(); navigateOverlay(-1); });
-      const nextNavBtn = document.createElement('button');
-      nextNavBtn.className = 'overlay-ctrl-btn overlay-nav-btn';
-      nextNavBtn.innerHTML = '&#8681;';
-      nextNavBtn.title = 'Next';
-      nextNavBtn.disabled = overlayIdx >= overlayCtx.length - 1;
-      nextNavBtn.addEventListener('click', e => { e.stopPropagation(); navigateOverlay(1); });
-      navDiv.appendChild(prevNavBtn);
-      navDiv.appendChild(nextNavBtn);
-      controls.appendChild(navDiv);
-    }
+    // Seek bar along the bottom edge: click or drag to scrub
+    const seek = document.createElement('div');
+    seek.className = 'overlay-seek';
+    seek.innerHTML = '<div class="overlay-seek-track"><div class="overlay-seek-fill"></div></div><div class="overlay-seek-time"></div>';
+    const fill = seek.querySelector('.overlay-seek-fill'), timeEl = seek.querySelector('.overlay-seek-time');
+    const fmt = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+    let scrubbing = false;
+    const paintSeek = () => {
+      const d = video.duration;
+      if (!d || !isFinite(d)) { fill.style.width = '0%'; timeEl.textContent = ''; return; }
+      fill.style.width = (Math.min(1, video.currentTime / d) * 100) + '%';
+      timeEl.textContent = `${fmt(video.currentTime)} / ${fmt(d)}`;
+    };
+    const scrubTo = x => {
+      const d = video.duration;
+      if (!d || !isFinite(d)) return;
+      const r = seek.getBoundingClientRect();
+      video.currentTime = Math.max(0, Math.min(1, (x - r.left) / (r.width || 1))) * d;
+      paintSeek();
+    };
+    seek.addEventListener('pointerdown', e => { e.stopPropagation(); scrubbing = true; seek.classList.add('scrubbing'); try { seek.setPointerCapture(e.pointerId); } catch (_) {} scrubTo(e.clientX); });
+    seek.addEventListener('pointermove', e => { if (scrubbing) scrubTo(e.clientX); });
+    const endScrub = () => { scrubbing = false; seek.classList.remove('scrubbing'); };
+    seek.addEventListener('pointerup', endScrub);
+    seek.addEventListener('pointercancel', endScrub);
+    seek.addEventListener('click', e => e.stopPropagation());
+    controls.appendChild(seek);
+    (function seekLoop() { if (!video.isConnected) return; paintSeek(); requestAnimationFrame(seekLoop); })();
 
     content.appendChild(controls);
   }
@@ -5022,10 +5104,21 @@
   // PLAYER — POP-OUT WINDOW
   // ═══════════════════════════════════════════════════════════════════════════
 
-  function popoutPlayer(startList, startIdx) {
-    const win = window.open(
+  // A pop-out opens as a document Picture-in-Picture window where the browser has them (Chrome): it has no address
+  // row, only a slim title strip. Elsewhere it is an ordinary small window. dim = { w, h } shapes the window like the video.
+  async function popoutPlayer(startList, startIdx, dim) {
+    let w = 360, h = 640;
+    if (dim && dim.w && dim.h) {
+      const k = Math.min(Math.min(screen.availWidth * 0.8, 1400) / dim.w, Math.min(screen.availHeight * 0.85, 900) / dim.h);
+      w = Math.max(320, Math.round(dim.w * k)); h = Math.max(240, Math.round(dim.h * k));
+    }
+    let win = null;
+    if (window.documentPictureInPicture && window.documentPictureInPicture.requestWindow) {
+      try { win = await window.documentPictureInPicture.requestWindow({ width: w, height: h }); } catch (_) { win = null; }
+    }
+    if (!win) win = window.open(
       'about:blank', '',   // empty name = new window every time
-      'width=360,height=640,resizable=yes,menubar=no,toolbar=no,location=no,status=no'
+      `width=${w},height=${h},resizable=yes,menubar=no,toolbar=no,location=no,status=no`
     );
     if (!win) { alert('Pop-out was blocked. Please allow pop-ups for this file and try again.'); return; }
 
@@ -8974,90 +9067,76 @@ render();
       /* ── Video overlay (unified player) ── */
       #video-overlay {
         position: fixed; inset: 0; z-index: 4000;
-        background: rgba(0,0,0,0.92);
+        background: rgba(6,6,8,.82);
+        -webkit-backdrop-filter: blur(22px) saturate(1.2); backdrop-filter: blur(22px) saturate(1.2);
         display: flex; align-items: center; justify-content: center;
-        cursor: default;
+        cursor: default; outline: none;
       }
+      #video-overlay.idle { cursor: none; }
+      #video-overlay.idle .ov-fade { opacity: 0; pointer-events: none; }
+      .ov-fade { transition: opacity .25s; }
+      /* the stage is sized in JS to the video's own shape; this is only the first guess */
       #video-overlay-content {
-        position: relative; width: 100%; max-width: 480px;
-        height: 90vh; max-height: 90vh;
+        position: relative; width: 38vh; height: 68vh; max-width: 100%; max-height: 100%;
         display: flex; align-items: center; justify-content: center;
+        background: #000; border-radius: 14px; overflow: hidden;
+        box-shadow: 0 24px 80px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.08);
       }
-      .overlay-video {
-        width: 100%; height: 100%; object-fit: contain; display: block;
-        border-radius: 8px;
+      .overlay-video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+      .overlay-topbar {
+        position: absolute; top: 0; left: 0; right: 0; z-index: 10; height: 56px; padding: 0 16px;
+        display: flex; align-items: center; justify-content: space-between; pointer-events: none;
       }
-      .overlay-close {
-        position: absolute; top: 16px; right: 16px; z-index: 10;
-        background: rgba(0,0,0,.5); border: none; border-radius: 50%;
-        color: #fff; width: 36px; height: 36px; font-size: 18px;
+      .overlay-topbar .overlay-counter { font-size: 13px; font-weight: 500; letter-spacing: .3px; color: rgba(255,255,255,.65); font-variant-numeric: tabular-nums; }
+      .overlay-tools { display: flex; gap: 8px; pointer-events: auto; }
+      .overlay-tool, .overlay-arrow, .overlay-ctrl-btn {
+        background: rgba(30,30,34,.55); border: 1px solid rgba(255,255,255,.12); color: #e8e8ec;
+        -webkit-backdrop-filter: blur(14px) saturate(1.4); backdrop-filter: blur(14px) saturate(1.4);
         cursor: pointer; display: flex; align-items: center; justify-content: center;
-        opacity: 0; transition: opacity .2s;
+        transition: background .15s, transform .12s, opacity .25s; pointer-events: auto;
       }
-      #video-overlay:hover .overlay-close { opacity: 1; }
-      .overlay-close:hover { background: rgba(0,0,0,.8); }
-      .overlay-controls-layer {
-        position: absolute; inset: 0; pointer-events: none;
+      .overlay-tool { width: 38px; height: 38px; border-radius: 12px; }
+      .overlay-tool:hover, .overlay-arrow:hover:not(:disabled), .overlay-ctrl-btn:hover { background: rgba(70,70,78,.7); }
+      .overlay-close:hover { background: rgba(200,60,60,.75); }
+      .overlay-arrow {
+        position: absolute; z-index: 10; top: 50%; width: 48px; height: 48px; margin-top: -24px; border-radius: 50%;
       }
+      .overlay-arrow-prev { left: 18px; }
+      .overlay-arrow-next { right: 18px; }
+      .overlay-arrow:disabled { opacity: .2; cursor: default; }
+      .overlay-controls-layer { position: absolute; inset: 0; pointer-events: none; }
       .overlay-controls-layer::after {
         content: ''; position: absolute; bottom: 0; left: 0; right: 0;
-        height: 120px; background: linear-gradient(transparent, rgba(0,0,0,.6));
-        pointer-events: none;
+        height: 130px; background: linear-gradient(transparent, rgba(0,0,0,.65));
+        pointer-events: none; z-index: 0;
       }
       .overlay-right-center {
-        position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
-        display: flex; flex-direction: column; gap: 12px;
-        pointer-events: auto; align-items: center;
+        position: absolute; right: 12px; top: 50%; transform: translateY(-50%); z-index: 2;
+        display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: auto;
       }
-      .overlay-ctrl-btn {
-        background: rgba(0,0,0,.55); border: none; border-radius: 50%;
-        color: #ddd; width: 46px; height: 46px; font-size: 20px;
-        cursor: pointer; display: flex; align-items: center; justify-content: center;
-        transition: background .15s, transform .1s; pointer-events: auto;
-        box-shadow: 0 2px 8px rgba(0,0,0,.4);
-      }
-      .overlay-ctrl-btn:hover { background: rgba(0,0,0,.8); transform: scale(1.08); }
+      .overlay-ctrl-btn { width: 42px; height: 42px; border-radius: 14px; font-size: 18px; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+      .overlay-ctrl-btn:hover { transform: scale(1.06); }
       .overlay-star-btn.active { color: gold; }
-      .overlay-meta {
-        position: absolute; bottom: 16px; left: 16px;
-        max-width: 55%; pointer-events: none;
-      }
-      .overlay-author {
-        font-size: 14px; font-weight: 600; color: #fff;
-        text-shadow: 0 1px 4px rgba(0,0,0,.9);
-        margin-bottom: 4px;
-      }
+      .overlay-meta { position: absolute; bottom: 30px; left: 18px; z-index: 2; max-width: calc(100% - 100px); pointer-events: none; }
+      .overlay-author { font-size: 14px; font-weight: 600; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.9); margin-bottom: 4px; pointer-events: auto; }
       .overlay-caption {
-        font-size: 12px; color: rgba(255,255,255,.85);
-        text-shadow: 0 1px 3px rgba(0,0,0,.8);
-        line-height: 1.4; display: -webkit-box;
-        -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+        font-size: 12.5px; color: rgba(255,255,255,.88); text-shadow: 0 1px 3px rgba(0,0,0,.8);
+        line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
       }
-      .overlay-mute-btn {
-        position: absolute; bottom: 14px; right: 14px; pointer-events: auto;
+      .overlay-seek { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; z-index: 3; cursor: pointer; pointer-events: auto; touch-action: none; }
+      .overlay-seek-track { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.25); transition: height .12s; }
+      .overlay-seek:hover .overlay-seek-track, .overlay-seek.scrubbing .overlay-seek-track { height: 7px; }
+      .overlay-seek-fill { height: 100%; width: 0; background: #fff; }
+      .overlay-seek-time {
+        position: absolute; right: 12px; bottom: 12px; font-size: 11px; font-variant-numeric: tabular-nums; color: rgba(255,255,255,.85);
+        text-shadow: 0 1px 3px rgba(0,0,0,.9); opacity: 0; transition: opacity .15s; pointer-events: none;
       }
-      .overlay-counter {
-        position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
-        font-size: 12px; color: rgba(255,255,255,.4); pointer-events: none;
-      }
-      .overlay-nav-btns {
-        position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
-        display: flex; gap: 8px; pointer-events: auto;
-      }
-      .overlay-nav-btn {
-        width: 36px !important; height: 36px !important; font-size: 20px !important;
-      }
-      .overlay-nav-btn:disabled { opacity: .25; cursor: default; }
+      .overlay-seek:hover .overlay-seek-time, .overlay-seek.scrubbing .overlay-seek-time { opacity: 1; }
 
       @media (max-width: 768px) {
-        #video-overlay { align-items: stretch; }
-        #video-overlay-content {
-          max-width: 100%; width: 100%; height: 100%;
-          max-height: 100%;
-        }
-        .overlay-video { border-radius: 0; }
-        .overlay-close { opacity: 1; }
         #video-overlay { bottom: var(--sp-nav-base, 56px); } /* above bottom nav */
+        #video-overlay-content { border-radius: 0; }
+        .overlay-arrow { display: none; }
       }
 
       #player-title-group { flex: 1; display: flex; align-items: baseline; gap: 10px; justify-content: center; }
