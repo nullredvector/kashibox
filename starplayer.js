@@ -1688,22 +1688,23 @@
       const sel = document.createElement('select'); sel.className = 'set-input lib-dir';
       dirs.forEach(d => { const o = document.createElement('option'); o.value = d; o.textContent = d; sel.appendChild(o); });
       const q = document.createElement('input'); q.type = 'search'; q.className = 'set-input'; q.placeholder = 'Filter'; q.autocomplete = 'off';
-      const allBtn = document.createElement('button'); allBtn.className = 'set-btn'; allBtn.textContent = 'Select all shown';
+      const allBtn = document.createElement('button'); allBtn.className = 'set-btn'; allBtn.textContent = 'Select all';
       const noneBtn = document.createElement('button'); noneBtn.className = 'set-btn'; noneBtn.textContent = 'Clear';
       const addBtn = document.createElement('button'); addBtn.className = 'set-btn lib-go'; addBtn.disabled = true;
       bar.append(sel, q, allBtn, noneBtn, addBtn);
       const info = document.createElement('div'); info.className = 'set-status lib-info';
       const list = document.createElement('div'); list.className = 'lib-list lib-files';
       bodyEl.append(bar, info, list);
-      let files = [], picked = new Set(), shown = [];
+      let files = [], picked = new Set(), shown = [], limit = 300;
       const paintBtn = () => { addBtn.textContent = picked.size ? `Add ${picked.size} video${picked.size !== 1 ? 's' : ''}` : 'Add'; addBtn.disabled = !picked.size; };
       const paint = () => {
         const f = q.value.trim().toLowerCase();
         shown = files.filter(x => !f || x.rel.toLowerCase().includes(f));
         list.innerHTML = '';
         const nNew = files.filter(x => !x.added).length;
-        info.textContent = `${files.length.toLocaleString()} video${files.length !== 1 ? 's' : ''} in this folder, ${nNew.toLocaleString()} not in the library yet.` + (shown.length > 600 ? ' Showing the first 600; use the filter to narrow it.' : '');
-        shown.slice(0, 600).forEach(x => {
+        info.textContent = `${files.length.toLocaleString()} video${files.length !== 1 ? 's' : ''} in this folder, ${nNew.toLocaleString()} not in the library yet.` + (f ? ` ${shown.length.toLocaleString()} match the filter.` : '');
+        allBtn.textContent = f ? `Select all ${shown.filter(x => !x.added).length.toLocaleString()} matching` : 'Select all';
+        shown.slice(0, limit).forEach(x => {
           const row = document.createElement('label'); row.className = 'lib-file' + (x.added ? ' in' : '');
           const cb = document.createElement('input'); cb.type = 'checkbox'; cb.disabled = x.added; cb.checked = picked.has(x.path);
           cb.addEventListener('change', () => { cb.checked ? picked.add(x.path) : picked.delete(x.path); paintBtn(); });
@@ -1711,10 +1712,16 @@
           const sz = document.createElement('span'); sz.className = 'lib-fsize'; sz.textContent = x.added ? 'In library' : libSize(x.size);
           row.append(cb, name, sz); list.appendChild(row);
         });
+        if (shown.length > limit) {
+          const more = document.createElement('button'); more.className = 'set-btn';
+          more.textContent = `Show more (${(shown.length - limit).toLocaleString()} more not listed yet)`;
+          more.addEventListener('click', () => { limit += 500; paint(); });
+          list.appendChild(more);
+        }
         paintBtn();
       };
       const load = () => {
-        list.textContent = 'Reading the folder…'; picked = new Set(); paintBtn();
+        list.textContent = 'Reading the folder…'; picked = new Set(); limit = 300; paintBtn();
         fetch('/api/library/files?dir=' + encodeURIComponent(sel.value), { cache: 'no-store' }).then(r => r.json().catch(() => ({ error: 'HTTP ' + r.status })))
           .then(d => {
             if (!d.files) { list.textContent = 'That folder cannot be read (' + (d.error || 'no answer') + ').'; return; }
@@ -1723,7 +1730,7 @@
           .catch(() => { list.textContent = 'The server did not answer (a very large folder can take a while). Try again.'; });
       };
       sel.addEventListener('change', load);
-      let t = null; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(paint, 150); });
+      let t = null; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { limit = 300; paint(); }, 150); });
       allBtn.addEventListener('click', () => { shown.filter(x => !x.added).forEach(x => picked.add(x.path)); paint(); });
       noneBtn.addEventListener('click', () => { picked.clear(); paint(); });
       addBtn.addEventListener('click', () => {
