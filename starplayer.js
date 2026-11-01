@@ -789,7 +789,7 @@
       tools.appendChild(b);
       return b;
     };
-    mkTool('overlay-popout-btn', 'Float the video in a small window (P)', POPOUT_SVG, () => overlayPopOut());
+    mkTool('overlay-popout-btn', 'Open in a new window (P)', POPOUT_SVG, () => overlayPopOut());
     const topMute = mkTool('overlay-mute-btn', 'Sound (M)', muteIcon(overlayMuted), () => overlayToggleMute());
     mkTool('overlay-close', 'Close (Esc)', '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>', closeVideoOverlay);
     top.append(count, tools);
@@ -905,67 +905,12 @@
     if (overlayEl && overlayEl._muteBtn) overlayEl._muteBtn.innerHTML = muteIcon(overlayMuted);
   }
 
-  // Open the video that is showing in a floating Picture-in-Picture window: the browser draws only the video (no title
-  // bar or address row), with its own play / seek / previous / next controls. The overlay closes and the same <video>
-  // keeps playing from a hidden holder. Browsers without video Picture-in-Picture get a small separate window instead.
-  let pip = null;   // { video, list, idx } while a Picture-in-Picture window is showing
-  function pipEnd() {
-    if (!pip) return;
-    const p = pip; pip = null;
-    try { p.video.pause(); p.video.removeAttribute('src'); p.video.load(); } catch (_) {}
-    p.video.remove();
-    if (navigator.mediaSession) ['previoustrack', 'nexttrack', 'togglemicrophone'].forEach(a => { try { navigator.mediaSession.setActionHandler(a, null); } catch (_) {} });
-  }
-  function pipStep(dir) {
-    if (!pip) return;
-    const i = pip.idx + dir;
-    if (i < 0 || i >= pip.list.length) return;
-    pip.idx = i;
-    pip.video.src = pip.list[i].videoPath;
-    pip.video.play().catch(() => {});
-  }
-  async function overlayPopOut() {
-    if (!overlayEl || !overlayVideo) return;
-    const list = overlayCtx, idx = overlayIdx, dim = overlayEl._dim, v = overlayVideo;
-    if (!document.pictureInPictureEnabled || !v.requestPictureInPicture || v.disablePictureInPicture) {
-      closeVideoOverlay();
-      popoutPlayer(list, idx, dim);
-      return;
-    }
-    try {
-      v.muted = false; overlayMuted = false;          // popping out means watching: sound on
-      await v.requestPictureInPicture();
-    } catch (_) {
-      closeVideoOverlay();
-      popoutPlayer(list, idx, dim);
-      return;
-    }
-    pipEnd();
-    // keep this very <video> alive outside the overlay
-    let holder = document.getElementById('sp-pip-holder');
-    if (!holder) {
-      holder = document.createElement('div');
-      holder.id = 'sp-pip-holder';
-      holder.style.cssText = 'position:fixed;left:-9999px;top:0;width:2px;height:2px;overflow:hidden;opacity:0;pointer-events:none';
-      document.body.appendChild(holder);
-    }
-    overlayVideo = null;                               // closeVideoOverlay must not blank it
-    holder.appendChild(v);
-    v.loop = true;
-    pip = { video: v, list, idx };
-    v.addEventListener('leavepictureinpicture', pipEnd, { once: true });
-    if (navigator.mediaSession) {
-      const ms = navigator.mediaSession;
-      const set = (a, fn) => { try { ms.setActionHandler(a, fn); } catch (_) {} };
-      set('previoustrack', idx > 0 ? () => pipStep(-1) : null);
-      set('nexttrack', list.length > 1 ? () => pipStep(1) : null);
-      // The floating window has no mute button of its own. Its microphone button (a video-call control) is used as the
-      // sound switch: "microphone on" = sound on.
-      const paintMic = () => { try { ms.setMicrophoneActive && ms.setMicrophoneActive(!v.muted); } catch (_) {} };
-      set('togglemicrophone', () => { v.muted = !v.muted; overlayMuted = v.muted; paintMic(); });
-      paintMic();
-    }
+  // Open the video that is showing in its own window, shaped like the video
+  function overlayPopOut() {
+    if (!overlayEl) return;
+    const list = overlayCtx, idx = overlayIdx, dim = overlayEl._dim;
     closeVideoOverlay();
+    popoutPlayer(list, idx, dim);
   }
 
   function renderOverlayContent() {
@@ -1007,7 +952,7 @@
     video.poster = item.coverSrc;
     video.className = 'overlay-video';
     video.addEventListener('playing', () => { video.poster = ''; }, { once: true });
-    video.addEventListener('loadedmetadata', () => { if (overlayVideo === video) fitOverlayStage(video.videoWidth, video.videoHeight); });
+    video.addEventListener('loadedmetadata', () => fitOverlayStage(video.videoWidth, video.videoHeight));
     video.addEventListener('contextmenu', e => { e.preventDefault(); video.paused ? video.play().catch(() => {}) : video.pause(); });
     // a click on the picture pauses or resumes (touch screens use the tap handler on the overlay)
     video.addEventListener('pointerup', e => { if (e.pointerType === 'mouse' && e.button === 0) video.paused ? video.play().catch(() => {}) : video.pause(); });
@@ -5159,14 +5104,19 @@
   // PLAYER — POP-OUT WINDOW
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // The full player in its own small window. dim = { w, h } shapes the window like the video.
-  function popoutPlayer(startList, startIdx, dim) {
+  // A pop-out opens as a document Picture-in-Picture window where the browser has them (Chrome): it has no address
+  // row, only a slim title strip. Elsewhere it is an ordinary small window. dim = { w, h } shapes the window like the video.
+  async function popoutPlayer(startList, startIdx, dim) {
     let w = 360, h = 640;
     if (dim && dim.w && dim.h) {
       const k = Math.min(Math.min(screen.availWidth * 0.8, 1400) / dim.w, Math.min(screen.availHeight * 0.85, 900) / dim.h);
       w = Math.max(320, Math.round(dim.w * k)); h = Math.max(240, Math.round(dim.h * k));
     }
-    const win = window.open(
+    let win = null;
+    if (window.documentPictureInPicture && window.documentPictureInPicture.requestWindow) {
+      try { win = await window.documentPictureInPicture.requestWindow({ width: w, height: h }); } catch (_) { win = null; }
+    }
+    if (!win) win = window.open(
       'about:blank', '',   // empty name = new window every time
       `width=${w},height=${h},resizable=yes,menubar=no,toolbar=no,location=no,status=no`
     );
@@ -5390,10 +5340,27 @@ function showGrpPicker(btn,id){
   setTimeout(()=>{document.addEventListener('click',function h(e){if(!p.contains(e.target)){closePicker();document.removeEventListener('click',h);}});},0);
 }
 
+// Keep the window shaped like the video that is playing: the width stays, the height follows the video's aspect ratio
+// (a very tall or wide video is limited to what the screen allows, narrowing the other side instead)
+function fitWin(){
+  const vw=v.videoWidth, vh=v.videoHeight; if(!vw||!vh) return;
+  try{
+    const fw=window.outerWidth-window.innerWidth, fh=window.outerHeight-window.innerHeight;
+    const maxW=Math.floor(screen.availWidth*0.9)-fw, maxH=Math.floor(screen.availHeight*0.9)-fh;
+    let w=window.innerWidth, h=Math.round(w*vh/vw);
+    if(h>maxH){h=maxH; w=Math.round(h*vw/vh);}
+    if(w>maxW){w=maxW; h=Math.round(w*vh/vw);}
+    if(Math.abs(w-window.innerWidth)>2||Math.abs(h-window.innerHeight)>2) window.resizeTo(w+fw,h+fh);
+  }catch(_){}
+}
+let fitTimer=null;
+window.addEventListener('resize',()=>{clearTimeout(fitTimer);fitTimer=setTimeout(fitWin,250);});
+
 function render(){
   closePicker();
   v.pause();
   const item=vids[idx]; if(!item)return;
+  v.onloadedmetadata=fitWin;
   v.poster=item.coverSrc; v.src=item.videoPath; v.muted=muted;
   v.play().catch(()=>{});
   v.onended=()=>{v.currentTime=0;v.play().catch(()=>{});};
