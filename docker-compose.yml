@@ -6,6 +6,8 @@ services:
       - "9494:8080"
     volumes:
       - /mnt/zion/enc/archive/Downloads/incomplete/content2/shorts:/archive
+      # Library: mount video folders below /library (read-only is fine), then pick them in Settings -> Library
+      # - /path/to/videos:/library/videos:ro
     environment:
       - ARCHIVE_DIR=/archive
       # Where the live log tab reads ttpull's /logs (same compose project => reachable by service name)

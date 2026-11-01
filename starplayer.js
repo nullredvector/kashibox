@@ -1240,11 +1240,12 @@
   let listTabKind = null;      // 'likes' | 'bookmarked' | 'following' while one of the pages is showing
   let listViewEl  = null;
   let listQuery   = '';
-  const listScope = { likes: 'official', bookmarked: 'official', following: 'with' };   // official | gone | all  (Following: with | everyone)
+  const listScope = { likes: 'official', bookmarked: 'official', following: 'with', library: 'all' };   // official | gone | all  (Following: with | everyone)
   const LIST_PAGES = {
     likes:      { title: 'Likes',     sort: 'likes' },
     bookmarked: { title: 'Favorites', sort: 'favs' },
     following:  { title: 'Following', sort: 'following' },
+    library:    { title: 'Library',   sort: 'favs' },   // videos from folders mounted into the container (Settings -> Library)
   };
 
   // Downloaded videos of a collection, newest first.
@@ -1357,6 +1358,7 @@
     listViewEl.style.display = 'flex';
     document.body.classList.add('sp-list-open');
     if (mobile) { activeMobileTab = 'favs'; updateMobileNavActive(); }
+    if (kind === 'library') { renderListView(); syncNavActive(); return; }
     archiveDbPromise().then(() => { if (listTabKind === kind) renderListView(); }).catch(() => {
       if (!listViewEl) return;
       listViewEl.innerHTML = '<div class="author-empty" style="padding:24px">No archive found yet. Once ttpull has downloaded something into this folder, it shows up here.</div>';
@@ -1383,9 +1385,9 @@
     if (!nav) return;
     const sel = activeAuthorId ? null
       : settingsTabActive ? '.settings-tab'
-      : listTabKind ? ({ likes: '.likes', bookmarked: '.bookmarked', following: '.following' })[listTabKind]
+      : listTabKind ? ({ likes: '.likes', bookmarked: '.bookmarked', following: '.following', library: '.library-tab' })[listTabKind]
       : starsTabActive ? '.stars-tab' : logTabActive ? '.log-tab' : autotagTabActive ? '.autotag-tab' : scoutTabActive ? '.scout-tab' : null;
-    ['.likes', '.bookmarked', '.following', '.stars-tab', '.log-tab', '.autotag-tab', '.scout-tab', '.settings-tab'].forEach(x => {
+    ['.likes', '.bookmarked', '.following', '.library-tab', '.stars-tab', '.log-tab', '.autotag-tab', '.scout-tab', '.settings-tab'].forEach(x => {
       nav.querySelector(x)?.classList.toggle('active', x === sel);
     });
   }
@@ -1394,6 +1396,7 @@
     if (!listViewEl || !listTabKind) return;
     const kind = listTabKind, meta = LIST_PAGES[kind];
     const following = kind === 'following';
+    const isLib = kind === 'library';
     releaseGridPreviews(listViewEl);
     listViewEl.innerHTML = '';
 
@@ -1425,7 +1428,7 @@
     const scope = document.createElement('div');
     scope.className = 'list-scope';
     const scopes = following ? [['with', 'With videos'], ['everyone', 'Everyone']] : [['official', 'Current'], ['gone', 'Disappeared'], ['all', 'All']];
-    scopes.forEach(([v, label]) => {
+    (isLib ? [] : scopes).forEach(([v, label]) => {
       const b = document.createElement('button');
       b.className = 'list-scope-btn' + (listScope[kind] === v ? ' on' : '');
       b.textContent = label;
@@ -1436,7 +1439,7 @@
     const search = document.createElement('input');
     search.className = 'list-search';
     search.type = 'search';
-    search.placeholder = following ? 'Search accounts' : 'Search captions and usernames';
+    search.placeholder = following ? 'Search accounts' : isLib ? 'Search the library' : 'Search captions and usernames';
     search.value = listQuery;
     let searchTimer = null;
     search.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { listQuery = search.value; body(); }, 200); });
@@ -1446,7 +1449,15 @@
     gear.title = 'Settings';
     gear.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">' + GEAR_PATH + '</svg>';
     gear.addEventListener('click', () => showSettingsTab());
-    header.append(title, count, gear, seg, scope, search);
+    header.append(title, count, gear, seg);
+    if (isLib) {
+      const add = document.createElement('button');
+      add.className = 'set-btn lib-add-btn';
+      add.textContent = '+ Add videos';
+      add.addEventListener('click', () => showLibraryAdd(() => loadLibrary(true).then(() => { if (listTabKind === 'library') renderListView(); })));
+      header.appendChild(add);
+    } else header.appendChild(scope);
+    header.appendChild(search);
     if (!following) header.appendChild(buildGridControls(meta.sort, grid, listViewEl));
     listViewEl.appendChild(header);
     listViewEl.appendChild(grid);
@@ -1455,6 +1466,18 @@
       releaseGridPreviews(listViewEl);
       grid.innerHTML = '';
       const q = listQuery.trim().toLowerCase();
+      if (isLib) {
+        if (!libItems) { grid.textContent = 'Loading…'; return; }
+        let items = libItems.filter(v => !isHidden(v.id));
+        if (q) items = items.filter(v => v.desc.toLowerCase().includes(q));
+        count.textContent = `${items.length} video${items.length !== 1 ? 's' : ''}`;
+        if (!items.length) {
+          grid.appendChild(Object.assign(document.createElement('div'), { className: 'author-empty', textContent: q ? 'No matches.' : libItems.length ? 'Everything here is hidden.' : 'The library is empty. Choose folders in Settings, then use + Add videos.' }));
+        }
+        fillGrid(grid, items, (v, idx) => buildListCard(v, idx, items));
+        observeGridPreviews(grid);
+        return;
+      }
       if (!_dbCache) { grid.textContent = 'Loading…'; return; }
       if (following && !_dbCache.following) {
         count.textContent = '0 accounts';
@@ -1479,6 +1502,7 @@
       fillGrid(grid, items, (v, idx) => buildListCard(v, idx, items));
       observeGridPreviews(grid);
     }
+    if (isLib) { loadLibrary().then(() => { if (listTabKind === 'library' && listViewEl) body(); }); }
     body();
   }
 
@@ -1507,6 +1531,17 @@
       dsc.className = 'stars-grid-desc';
       dsc.textContent = v.desc.length > 80 ? v.desc.slice(0, 80) + '…' : v.desc;
       card.appendChild(dsc);
+    }
+    if (v.library) {
+      const rm = document.createElement('button');
+      rm.className = 'lib-remove';
+      rm.textContent = 'Remove from library';
+      rm.title = 'The file itself is not touched';
+      rm.addEventListener('click', () => {
+        if (!window.confirm('Remove this video from the library? The file stays where it is.')) return;
+        libPost({ remove: [v.id] }).then(() => loadLibrary(true)).then(() => { if (listTabKind === 'library') renderListView(); });
+      });
+      card.appendChild(rm);
     }
     return card;
   }
@@ -1544,6 +1579,159 @@
     }
     card.addEventListener('click', () => showAuthorTab(a.id, label));
     return card;
+  }
+
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LIBRARY — videos from folders mounted into the container (Settings -> Library picks the
+  // folders, "+ Add videos" picks the files). Library videos play and cast like the archive's.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  let libItems = null;   // [{ id, desc, createTime, coverSrc, videoPath, library: true }] | null until loaded
+  let libInfo  = null;   // { root, dirs } from the server
+  function loadLibrary(force) {
+    if (libItems && !force) return Promise.resolve(libItems);
+    return fetch('/api/library', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!d) return libItems || [];
+      libInfo = { root: d.root, dirs: d.dirs };
+      libItems = d.items.filter(x => !x.missing).map(x => ({
+        id: x.id, authorName: '', desc: x.title, createTime: x.added, library: true,
+        coverSrc: `api/library/covers/${x.id}.jpg`, videoPath: `api/library/videos/${x.id}.mp4`,
+      }));
+      return libItems;
+    }).catch(() => libItems || []);
+  }
+  function libPost(body) {
+    return fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(r => r.json().then(d => Object.assign({ status: r.status }, d))).catch(() => ({ error: 'The server could not be reached.' }));
+  }
+  const libSize = n => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? Math.round(n / 1e6) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB';
+  const libDlg = () => {
+    document.getElementById('sp-lib-dlg')?.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'sp-lib-dlg';
+    const head = document.createElement('div');
+    head.className = 'hm-head';
+    const title = document.createElement('div');
+    title.className = 'hm-title';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'set-btn';
+    closeBtn.textContent = 'Close';
+    head.append(title, closeBtn);
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'lib-dlg-body';
+    wrap.append(head, bodyEl);
+    document.body.appendChild(wrap);
+    const close = () => { wrap.remove(); document.removeEventListener('keydown', onKey); if (wrap._onClose) wrap._onClose(); };
+    const onKey = e => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    closeBtn.addEventListener('click', close);
+    return { wrap, title, bodyEl, close, head };
+  };
+
+  // Settings: pick a folder below the mount root (one level at a time) and use it as a source for the library
+  function showLibraryFolderPicker(onChange) {
+    const { title, bodyEl, close } = libDlg();
+    title.textContent = 'Choose a library folder';
+    const crumb = document.createElement('div'); crumb.className = 'lib-crumb';
+    const list = document.createElement('div'); list.className = 'lib-list';
+    const foot = document.createElement('div'); foot.className = 'lib-foot';
+    bodyEl.append(crumb, list, foot);
+    const go = p => {
+      list.textContent = 'Loading…';
+      fetch('/api/library/browse' + (p ? '?path=' + encodeURIComponent(p) : ''), { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : Promise.reject())).then(d => {
+          crumb.textContent = d.path;
+          list.innerHTML = ''; foot.innerHTML = '';
+          if (d.parent) {
+            const up = document.createElement('button'); up.className = 'lib-row'; up.textContent = '‹ Up';
+            up.addEventListener('click', () => go(d.parent)); list.appendChild(up);
+          }
+          d.dirs.forEach(x => {
+            const b = document.createElement('button'); b.className = 'lib-row'; b.textContent = '📁 ' + x.name;
+            b.addEventListener('click', () => go(x.path)); list.appendChild(b);
+          });
+          if (!d.dirs.length) { const n = document.createElement('div'); n.className = 'hm-note'; n.textContent = 'No folders in here.'; list.appendChild(n); }
+          const use = document.createElement('button'); use.className = 'set-btn';
+          use.textContent = d.path === d.root ? 'Use the whole library root' : 'Use this folder';
+          use.addEventListener('click', () => {
+            libPost({ addDir: d.path }).then(r => {
+              if (r.error) { spToast(r.error); return; }
+              libInfo = Object.assign(libInfo || {}, { dirs: r.dirs });
+              close(); onChange && onChange();
+            });
+          });
+          const n = document.createElement('span'); n.className = 'set-status';
+          n.textContent = d.videos ? `${d.videos} video file${d.videos !== 1 ? 's' : ''} directly in this folder` : '';
+          foot.append(use, n);
+        }).catch(() => { list.textContent = 'This folder cannot be read. Is a folder mounted below the library root in the container?'; });
+    };
+    go('');
+  }
+
+  // Library tab: choose which videos of the source folders join the library
+  function showLibraryAdd(onDone) {
+    const { wrap, title, bodyEl, close } = libDlg();
+    wrap._onClose = onDone;
+    title.textContent = 'Add videos to the library';
+    loadLibrary(true).then(() => {
+      const dirs = (libInfo && libInfo.dirs) || [];
+      if (!dirs.length) {
+        bodyEl.innerHTML = '<div class="hm-note" style="padding:16px">No library folders yet. Open Settings -> Library and choose the folders to take videos from.</div>';
+        const b = document.createElement('button'); b.className = 'set-btn'; b.style.margin = '0 16px'; b.textContent = 'Open Settings';
+        b.addEventListener('click', () => { close(); showSettingsTab(); });
+        bodyEl.appendChild(b);
+        return;
+      }
+      const bar = document.createElement('div'); bar.className = 'lib-bar';
+      const sel = document.createElement('select'); sel.className = 'set-input lib-dir';
+      dirs.forEach(d => { const o = document.createElement('option'); o.value = d; o.textContent = d; sel.appendChild(o); });
+      const q = document.createElement('input'); q.type = 'search'; q.className = 'set-input'; q.placeholder = 'Filter'; q.autocomplete = 'off';
+      const allBtn = document.createElement('button'); allBtn.className = 'set-btn'; allBtn.textContent = 'Select all shown';
+      const noneBtn = document.createElement('button'); noneBtn.className = 'set-btn'; noneBtn.textContent = 'Clear';
+      const addBtn = document.createElement('button'); addBtn.className = 'set-btn lib-go'; addBtn.disabled = true;
+      bar.append(sel, q, allBtn, noneBtn, addBtn);
+      const info = document.createElement('div'); info.className = 'set-status lib-info';
+      const list = document.createElement('div'); list.className = 'lib-list lib-files';
+      bodyEl.append(bar, info, list);
+      let files = [], picked = new Set(), shown = [];
+      const paintBtn = () => { addBtn.textContent = picked.size ? `Add ${picked.size} video${picked.size !== 1 ? 's' : ''}` : 'Add'; addBtn.disabled = !picked.size; };
+      const paint = () => {
+        const f = q.value.trim().toLowerCase();
+        shown = files.filter(x => !f || x.rel.toLowerCase().includes(f));
+        list.innerHTML = '';
+        const nNew = files.filter(x => !x.added).length;
+        info.textContent = `${files.length.toLocaleString()} video${files.length !== 1 ? 's' : ''} in this folder, ${nNew.toLocaleString()} not in the library yet.` + (shown.length > 600 ? ' Showing the first 600; use the filter to narrow it.' : '');
+        shown.slice(0, 600).forEach(x => {
+          const row = document.createElement('label'); row.className = 'lib-file' + (x.added ? ' in' : '');
+          const cb = document.createElement('input'); cb.type = 'checkbox'; cb.disabled = x.added; cb.checked = picked.has(x.path);
+          cb.addEventListener('change', () => { cb.checked ? picked.add(x.path) : picked.delete(x.path); paintBtn(); });
+          const name = document.createElement('span'); name.className = 'lib-fname'; name.textContent = x.rel;
+          const sz = document.createElement('span'); sz.className = 'lib-fsize'; sz.textContent = x.added ? 'In library' : libSize(x.size);
+          row.append(cb, name, sz); list.appendChild(row);
+        });
+        paintBtn();
+      };
+      const load = () => {
+        list.textContent = 'Reading the folder…'; picked = new Set(); paintBtn();
+        fetch('/api/library/files?dir=' + encodeURIComponent(sel.value), { cache: 'no-store' }).then(r => (r.ok ? r.json() : Promise.reject()))
+          .then(d => { files = d.files.sort((a, b) => a.rel.localeCompare(b.rel, undefined, { numeric: true })); paint(); })
+          .catch(() => { list.textContent = 'That folder cannot be read.'; });
+      };
+      sel.addEventListener('change', load);
+      let t = null; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(paint, 150); });
+      allBtn.addEventListener('click', () => { shown.filter(x => !x.added).forEach(x => picked.add(x.path)); paint(); });
+      noneBtn.addEventListener('click', () => { picked.clear(); paint(); });
+      addBtn.addEventListener('click', () => {
+        addBtn.disabled = true;
+        libPost({ addFiles: [...picked] }).then(r => {
+          if (r.error) { spToast(r.error); paintBtn(); return; }
+          spToast(`Added ${r.added} video${r.added !== 1 ? 's' : ''} to the library`);
+          load();
+        });
+      });
+      load();
+    });
   }
 
 
@@ -1954,6 +2142,37 @@
         dlPresets.appendChild(b);
       });
     }
+
+    // ── library folders ──
+    const libSec = section('Library', 'Videos from folders mounted into the container (below the library root) can be added to the Library tab, then played and cast like the others. Choose the folders to take videos from, then add the videos you want with + Add videos in the Library tab. Removing a folder here only stops it being offered; videos already in the library stay until you remove them there. Files are never changed or deleted.');
+    const libList = document.createElement('div');
+    libList.className = 'lib-dirs';
+    const libRow = document.createElement('div');
+    libRow.className = 'set-try';
+    const libAdd = document.createElement('button');
+    libAdd.className = 'set-btn';
+    libAdd.textContent = 'Choose a folder…';
+    libAdd.addEventListener('click', () => showLibraryFolderPicker(paintLib));
+    libRow.appendChild(libAdd);
+    libSec.append(libList, libRow);
+    function paintLib() {
+      loadLibrary(true).then(() => {
+        if (!libList.isConnected) return;
+        libList.innerHTML = '';
+        const dirs = (libInfo && libInfo.dirs) || [];
+        if (!dirs.length) { const n = document.createElement('div'); n.className = 'set-status'; n.textContent = `No folders chosen yet. Mount folders below ${(libInfo && libInfo.root) || '/library'} in the container.`; libList.appendChild(n); }
+        dirs.forEach(d => {
+          const row = document.createElement('div'); row.className = 'lib-dir-row';
+          const name = document.createElement('span'); name.textContent = d;
+          const rm = document.createElement('button'); rm.className = 'set-btn'; rm.textContent = 'Remove';
+          rm.addEventListener('click', () => libPost({ removeDir: d }).then(() => paintLib()));
+          row.append(name, rm); libList.appendChild(row);
+        });
+        const n = (libItems || []).length;
+        const c = document.createElement('div'); c.className = 'set-status'; c.textContent = `${n.toLocaleString()} video${n !== 1 ? 's' : ''} in the library.`; libList.appendChild(c);
+      });
+    }
+    paintLib();
 
     // ── For You scout ──
     const sc = section('For You scout', 'A program on your server can look through the For You feed and suggest videos for you to open and like yourself, judged by the tags you taught the AI tagger. It never likes, follows or posts anything, and it stops and tells you if the site asks it to verify. Picks appear in the For You tab. It is off until you turn it on.');
@@ -3023,7 +3242,7 @@
       hideRecentsView();
       showAutotagTab();
     } else {
-      // favs: the Library (Likes, Favorites, Following)
+      // favs: the Archive tab (Likes, Favorites, Following, Library)
       if (playerOpen) closePlayer();
       hideRecentsView();
       showListTab(listTabKind || 'bookmarked');
@@ -3118,7 +3337,7 @@
       { id: 'home',    label: 'Home',    svg: '<path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>' },
       { id: 'stars',   label: 'Stars',   svg: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>' },
       { id: 'recents', label: 'Recents', svg: '<path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L11 13.5V7h1.5v5.87l4.75 2.82-1.01 1.74z"/>' },
-      { id: 'favs',    label: 'Library',    svg: '<path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>' },
+      { id: 'favs',    label: 'Archive',    svg: '<path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>' },
       { id: 'scout',   label: 'For You', svg: '<path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/>' },
       { id: 'review',  label: 'Review',  svg: '<path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/>' },
     ];
@@ -7825,6 +8044,18 @@ render();
       if (fol) fol.insertAdjacentElement('afterend', tab); else nav.appendChild(tab);
     }
 
+    // Library tab — right of Following
+    if (!nav.querySelector('.library-tab')) {
+      const tab = makeNavTab('library-tab',
+        '<path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12.5v-9l6 4.5-6 4.5z"/>',
+        'Library',
+        () => { if (listTabKind !== 'library') showListTab('library'); }
+      );
+      if (listTabKind === 'library') tab.classList.add('active');
+      const fol = nav.querySelector('.following');
+      if (fol) fol.insertAdjacentElement('afterend', tab); else nav.appendChild(tab);
+    }
+
     // For You picks tab: just left of Review
     if (!nav.querySelector('.scout-tab')) {
       const tab = makeNavTab('scout-tab',
@@ -8142,7 +8373,7 @@ render();
 
 
       /* ── Stars & Player nav tabs ── */
-      nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab, nav .scout-tab {
+      nav .library-tab, nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab, nav .scout-tab {
         display: flex; align-items: center;
         cursor: pointer; border-bottom: 3px solid transparent; color: inherit;
         white-space: nowrap;
@@ -8150,20 +8381,20 @@ render();
 
       /* ── Icon-only top nav (labels hidden; title tooltips added in JS) ── */
       nav { margin-left: 20px !important; }
-      nav .likes, nav .bookmarked, nav .following, nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab, nav .scout-tab {
+      nav .likes, nav .bookmarked, nav .following, nav .library-tab, nav .stars-tab, nav .player-tab, nav .session-tab, nav .settings-tab, nav .log-tab, nav .autotag-tab, nav .scout-tab {
         font-size: 0 !important; gap: 0 !important;
         margin: 3.3px 2px 0 !important; padding: 0 14px !important;
         justify-content: center; border-radius: 6px 6px 0 0;
         transition: color .15s, background .15s;
       }
-      nav .likes svg, nav .bookmarked svg, nav .following svg, nav .stars-tab svg, nav .player-tab svg, nav .session-tab svg, nav .settings-tab svg, nav .log-tab svg, nav .autotag-tab svg, nav .scout-tab svg {
+      nav .likes svg, nav .bookmarked svg, nav .following svg, nav .library-tab svg, nav .stars-tab svg, nav .player-tab svg, nav .session-tab svg, nav .settings-tab svg, nav .log-tab svg, nav .autotag-tab svg, nav .scout-tab svg {
         width: 20px !important; height: 20px !important; margin: 0 !important;
       }
       nav .likes:not(.active):hover, nav .bookmarked:not(.active):hover,
-      nav .following:not(.active):hover, nav .stars-tab:not(.active):hover, nav .player-tab:not(.active):hover, nav .session-tab:not(.menu-open):hover, nav .settings-tab:not(.active):hover, nav .log-tab:not(.active):hover, nav .autotag-tab:not(.active):hover, nav .scout-tab:not(.active):hover {
+      nav .following:not(.active):hover, nav .library-tab:not(.active):hover, nav .stars-tab:not(.active):hover, nav .player-tab:not(.active):hover, nav .session-tab:not(.menu-open):hover, nav .settings-tab:not(.active):hover, nav .log-tab:not(.active):hover, nav .autotag-tab:not(.active):hover, nav .scout-tab:not(.active):hover {
         color: var(--active, #d7d7d7); background: rgba(255,255,255,.05);
       }
-      nav .likes.active, nav .bookmarked.active, nav .following.active, nav .stars-tab.active, nav .player-tab.active, nav .session-tab.menu-open, nav .settings-tab.active, nav .log-tab.active, nav .autotag-tab.active, nav .scout-tab.active {
+      nav .likes.active, nav .bookmarked.active, nav .following.active, nav .library-tab.active, nav .stars-tab.active, nav .player-tab.active, nav .session-tab.menu-open, nav .settings-tab.active, nav .log-tab.active, nav .autotag-tab.active, nav .scout-tab.active {
         color: var(--active, #d7d7d7); background: rgba(255,255,255,.09);
         border-bottom: 3px solid var(--active, #d7d7d7); cursor: default;
       }
@@ -8534,6 +8765,34 @@ render();
       .set-btn { background: rgba(255,255,255,.1); border: 1px solid #555; border-radius: 8px; color: #ddd; padding: 8px 14px; font-size: 14px; cursor: pointer; }
       .set-btn:hover { background: rgba(255,255,255,.18); }
       .list-gear { display: none; background: none; border: none; color: #ddd; padding: 2px; cursor: pointer; }
+
+      /* ── Library (folders from the container, added by hand) ── */
+      .lib-add-btn { padding: 4px 11px; font-size: 12px; border-radius: 12px; }
+      .lib-remove { margin: 4px 0 0; background: none; border: none; color: #999; font-size: 11px; padding: 0; cursor: pointer; text-align: left; }
+      .lib-remove:hover { color: #e88; }
+      .lib-dirs { margin-bottom: 10px; }
+      .lib-dir-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; color: #ccc; word-break: break-all; }
+      .lib-dir-row span { flex: 1; min-width: 0; }
+      #sp-lib-dlg { position: fixed; inset: 0; z-index: 100000; background: rgba(0,0,0,.94); display: flex; flex-direction: column; color: #ddd; }
+      #sp-lib-dlg .hm-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #444; flex-wrap: wrap; }
+      #sp-lib-dlg .hm-title { font-size: 18px; font-weight: 600; flex: 1; min-width: 140px; }
+      #sp-lib-dlg .hm-note { color: #aaa; font-size: 13px; padding: 8px 4px; }
+      .lib-dlg-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px; gap: 8px; }
+      .lib-crumb { font-size: 13px; color: #aaa; word-break: break-all; }
+      .lib-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+      .lib-row { text-align: left; background: rgba(255,255,255,.06); border: none; border-radius: 6px; color: #ddd; padding: 10px 12px; font-size: 14px; cursor: pointer; }
+      .lib-row:hover { background: rgba(255,255,255,.14); }
+      .lib-foot { display: flex; align-items: center; gap: 12px; }
+      .lib-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .lib-bar .set-input { width: auto; flex: 1 1 160px; min-width: 0; }
+      .lib-go:not(:disabled) { background: #2e7d4f; border-color: #3a9b63; color: #fff; }
+      .lib-go:disabled { opacity: .5; cursor: default; }
+      .lib-file { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+      .lib-file:hover { background: rgba(255,255,255,.07); }
+      .lib-file.in { opacity: .5; cursor: default; }
+      .lib-file input { width: 18px; height: 18px; flex-shrink: 0; }
+      .lib-fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .lib-fsize { color: #999; font-size: 12px; flex-shrink: 0; }
 
       /* ── Library pages (Likes, Favorites, Following) ── */
       #list-view { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }

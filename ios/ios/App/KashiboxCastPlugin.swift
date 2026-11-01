@@ -32,16 +32,20 @@ public class KashiboxCastPlugin: CAPPlugin, GCKSessionManagerListener, GCKRemote
 
     // MARK: - JS-callable methods
 
+    // The Cast SDK insists on the main thread (it throws otherwise), but Capacitor calls plugin methods on its own queue.
+
     @objc func getState(_ call: CAPPluginCall) {
-        let state = GCKCastContext.sharedInstance().castState
-        call.resolve(["state": stateName(state)])
+        DispatchQueue.main.async {
+            let state = GCKCastContext.sharedInstance().castState
+            call.resolve(["state": self.stateName(state)])
+        }
     }
 
     @objc func requestSession(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             GCKCastContext.sharedInstance().presentCastDialog()
+            call.resolve()
         }
-        call.resolve()
     }
 
     @objc func sendMessage(_ call: CAPPluginCall) {
@@ -49,47 +53,62 @@ public class KashiboxCastPlugin: CAPPlugin, GCKSessionManagerListener, GCKRemote
             call.reject("data required")
             return
         }
-        guard let channel = currentChannel() else {
-            call.reject("no session")
-            return
-        }
-        do {
-            let json = try JSONSerialization.data(withJSONObject: data)
-            let str  = String(data: json, encoding: .utf8) ?? "{}"
-            channel.sendTextMessage(str, error: nil)
-            call.resolve()
-        } catch {
-            call.reject(error.localizedDescription)
+        DispatchQueue.main.async {
+            guard let session = GCKCastContext.sharedInstance().sessionManager.currentCastSession else {
+                call.reject("no session")
+                return
+            }
+            if self.channel == nil || self.channel?.isConnected == false { self.attachChannel(to: session) }
+            guard let channel = self.channel else {
+                call.reject("no channel")
+                return
+            }
+            do {
+                let json = try JSONSerialization.data(withJSONObject: data)
+                let text = String(data: json, encoding: .utf8) ?? "{}"
+                channel.sendTextMessage(text, error: nil)
+                call.resolve()
+            } catch {
+                call.reject(error.localizedDescription)
+            }
         }
     }
 
     @objc func endSession(_ call: CAPPluginCall) {
-        GCKCastContext.sharedInstance().sessionManager.endSessionAndStopCasting(true)
-        call.resolve()
+        DispatchQueue.main.async {
+            GCKCastContext.sharedInstance().sessionManager.endSessionAndStopCasting(true)
+            call.resolve()
+        }
     }
 
-    // MARK: - GCKSessionManagerListener
+    // MARK: - GCKSessionManagerListener (called on the main thread)
 
     public func sessionManager(_ sessionManager: GCKSessionManager, didStart session: GCKSession) {
         notifyListeners("castStateChanged", data: ["state": "connected"])
     }
 
+    public func sessionManager(_ sessionManager: GCKSessionManager, didStart session: GCKCastSession) {
+        attachChannel(to: session)
+    }
+
     public func sessionManager(_ sessionManager: GCKSessionManager, didEnd session: GCKSession, withError error: Error?) {
+        channel = nil
         notifyListeners("castStateChanged", data: ["state": "notConnected"])
     }
 
     public func sessionManager(_ sessionManager: GCKSessionManager, didResumeCastSession session: GCKCastSession) {
+        attachChannel(to: session)
         notifyListeners("castStateChanged", data: ["state": "connected"])
     }
 
     // MARK: - Helpers
 
-    private func currentChannel() -> GCKGenericChannel? {
-        guard let session = GCKCastContext.sharedInstance().sessionManager.currentCastSession else { return nil }
-        // Use a generic channel on our namespace
+    // One channel for our namespace per session, created on the main thread and kept for as long as the session lasts.
+    private var channel: GCKGenericChannel?
+
+    private func attachChannel(to session: GCKCastSession) {
         let ch = GCKGenericChannel(namespace: namespace)
-        session.add(ch)
-        return ch
+        if session.add(ch) { channel = ch }
     }
 
     private func stateName(_ state: GCKCastState) -> String {

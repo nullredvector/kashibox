@@ -8,6 +8,7 @@ const crypto   = require('crypto');
 const dbStars  = require('./db_stars');
 const tvAuthor = require('./tv_author');
 const tvSessions = require('./tv_sessions');
+const library  = require('./library');
 const scoutStore = require('./scout_store');
 
 const ARCHIVE_DIR = process.env.ARCHIVE_DIR || '/archive';
@@ -20,6 +21,9 @@ const MIME = {
   '.js':   'application/javascript',
   '.css':  'text/css',
   '.mp4':  'video/mp4',
+  '.m4v':  'video/mp4',
+  '.mov':  'video/quicktime',
+  '.webm': 'video/webm',
   '.jpg':  'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.png':  'image/png',
@@ -167,6 +171,78 @@ let tvGrid = [];
 let tvSessionId = null;   // the saved TV session the grid is being added to (null = none yet)
 let tvFeed = [];          // the phone's Home feed order (video paths), published by the phone for the TV's click-to-advance
 let tvSelectedId = null;  // the panel highlighted on the TV (the TV reports it while the highlight shows); a new video replaces it
+
+// A file with range-request support (required for video), caching headers and a 304 when unchanged
+function serveFile(req, res, filePath, opts) {
+  opts = opts || {};
+  const mime = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+  fs.stat(filePath, (err, stat) => {
+    if (err) {
+      res.writeHead(err.code === 'ENOENT' ? 404 : 500);
+      res.end(err.code === 'ENOENT' ? 'Not found' : 'Server error');
+      return;
+    }
+
+    const total = stat.size;
+    // Videos and covers never change once downloaded, so let the phone keep them: a looping video then does not
+    // go back to the server on every round. Everything else (the db files, scripts) is revalidated each time.
+    const cacheable = opts.cacheable !== undefined ? opts.cacheable : /\.(mp4|jpe?g|png|webp|gif)$/i.test(filePath) && !filePath.includes('.appdata');
+    const etag = `W/"${total}-${Math.floor(stat.mtimeMs)}"`;
+    const base = {
+      'Accept-Ranges': 'bytes',
+      'Content-Type':  mime,
+      'Last-Modified': stat.mtime.toUTCString(),
+      'ETag':          etag,
+      'Cache-Control': cacheable ? 'public, max-age=604800' : 'no-cache',
+    };
+    const range = req.headers['range'];
+
+    if (!range && req.headers['if-none-match'] === etag) { res.writeHead(304, base); res.end(); return; }
+
+    // Stream a file section; when the client drops the request (a phone seeks, a video loops) close the file too
+    const send = (opts) => {
+      if (req.method === 'HEAD') { res.end(); return; }
+      const stream = fs.createReadStream(filePath, opts);
+      stream.on('error', () => res.destroy());
+      res.on('close', () => stream.destroy());
+      stream.pipe(res);
+    };
+
+    if (range) {
+      const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+      let start = 0, end = total - 1, ok = Boolean(m) && total > 0;
+      if (ok) {
+        if (m[1] === '') { start = Math.max(0, total - parseInt(m[2] || '0', 10)); }
+        else { start = parseInt(m[1], 10); if (m[2]) end = Math.min(parseInt(m[2], 10), total - 1); }
+        ok = start <= end && start < total;
+      }
+      if (!ok) { res.writeHead(416, { 'Content-Range': `bytes */${total}` }); res.end(); return; }
+      res.writeHead(206, Object.assign({}, base, { 'Content-Range': `bytes ${start}-${end}/${total}`, 'Content-Length': end - start + 1 }));
+      send({ start, end });
+    } else if (/\.(js|json|html)$/i.test(filePath) && total >= MIN_GZIP && wantsGzip(req) && req.method !== 'HEAD') {
+      // text from the archive (the db files): compress once per change and keep it, up to a few files
+      const key = filePath + '|' + etag;
+      let gz = gzMemo.get(key);
+      const out = body => {
+        res.writeHead(200, Object.assign({}, base, { 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding', 'Content-Length': body.length }));
+        res.end(body);
+      };
+      if (gz) return out(gz);
+      fs.readFile(filePath, (e2, buf) => {
+        if (e2) { res.writeHead(500); res.end('Server error'); return; }
+        zlib.gzip(buf, { level: 6 }, (e3, z) => {
+          if (e3) { res.writeHead(200, Object.assign({}, base, { 'Content-Length': buf.length })); res.end(buf); return; }
+          if (gzMemo.size >= 12) gzMemo.delete(gzMemo.keys().next().value);
+          gzMemo.set(key, z);
+          out(z);
+        });
+      });
+    } else {
+      res.writeHead(200, Object.assign({}, base, { 'Content-Length': total }));
+      send(undefined);
+    }
+  });
+}
 
 http.createServer((req, res) => {
   const pathname = url.parse(req.url).pathname;
@@ -679,6 +755,86 @@ http.createServer((req, res) => {
     return;
   }
 
+  // ── Library: videos from folders mounted under LIBRARY_ROOT ────────────────
+  // GET  /api/library                      → { root, dirs, items: [{ id, title, added, size, missing }] }
+  // GET  /api/library/browse?path=         → the folders below a folder under the root (Settings picker)
+  // GET  /api/library/files?dir=           → the videos below one chosen source folder, each marked added or not
+  // POST /api/library { addDir | removeDir | addFiles: [paths] | remove: [ids] }
+  // GET  /api/library/videos/<id>.mp4, /api/library/covers/<id>.jpg → the media, by id (never by path)
+  // Nothing is ever deleted from disk; "remove" only takes a video out of the library.
+  if (pathname.startsWith('/api/library')) {
+    const sendJson = (code, obj) => { const b = JSON.stringify(obj); sendBody(req, res, code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, b); };
+    const q = url.parse(req.url, true).query;
+    const m = /^\/api\/library\/(videos|covers)\/(l[0-9a-f]{12})\.(mp4|jpg)$/.exec(pathname);
+    if (m && (req.method === 'GET' || req.method === 'HEAD')) {
+      if (m[1] === 'videos') {
+        const file = library.fileFor(m[2]);
+        if (!file) { res.writeHead(404); res.end('Not found'); return; }
+        serveFile(req, res, file, { cacheable: true });
+      } else {
+        library.coverFor(m[2]).then(file => {
+          if (!file) { res.writeHead(404); res.end('Not found'); return; }
+          serveFile(req, res, file, { cacheable: true });
+        });
+      }
+      return;
+    }
+    if (pathname === '/api/library' && req.method === 'GET') {
+      sendJson(200, { root: library.ROOT, dirs: library.sourceDirs(), items: library.list() });
+      return;
+    }
+    if (pathname === '/api/library/browse' && req.method === 'GET') {
+      const r = library.browse(String(q.path || ''));
+      if (!r) return sendJson(404, { error: 'No such folder under ' + library.ROOT });
+      sendJson(200, r);
+      return;
+    }
+    if (pathname === '/api/library/files' && req.method === 'GET') {
+      const files = library.listFiles(String(q.dir || ''));
+      if (!files) return sendJson(404, { error: 'Not a library folder' });
+      sendJson(200, { files });
+      return;
+    }
+    if (pathname === '/api/library' && req.method === 'POST') {
+      const origin = req.headers['origin'];
+      let sameOrigin = true;
+      if (origin) { try { sameOrigin = new URL(origin).host === req.headers['host']; } catch (_) { sameOrigin = false; } }
+      if (!sameOrigin) return sendJson(403, { error: 'cross-origin request refused' });
+      if (!/^application\/json/i.test(req.headers['content-type'] || '')) return sendJson(415, { error: 'JSON required' });
+      let size = 0, chunks = [], tooBig = false;
+      req.on('data', c => { size += c.length; if (size > 4e6) tooBig = true; else chunks.push(c); });
+      req.on('end', () => {
+        if (tooBig) return sendJson(413, { error: 'body too large' });
+        let d;
+        try { d = JSON.parse(Buffer.concat(chunks).toString()); } catch (_) { return sendJson(400, { error: 'Invalid JSON' }); }
+        if (!d || typeof d !== 'object' || Array.isArray(d)) return sendJson(400, { error: 'Invalid JSON' });
+        const strs = a => Array.isArray(a) && a.every(x => typeof x === 'string');
+        try {
+          if (d.addDir !== undefined) {
+            if (typeof d.addDir !== 'string' || !library.addDir(d.addDir)) return sendJson(400, { error: 'That folder is not under ' + library.ROOT });
+            return sendJson(200, { ok: true, dirs: library.sourceDirs() });
+          }
+          if (d.removeDir !== undefined) {
+            if (typeof d.removeDir !== 'string') return sendJson(400, { error: 'Invalid request' });
+            library.removeDir(d.removeDir);
+            return sendJson(200, { ok: true, dirs: library.sourceDirs() });
+          }
+          if (d.addFiles !== undefined) {
+            if (!strs(d.addFiles)) return sendJson(400, { error: 'addFiles must be a list of paths' });
+            return sendJson(200, { ok: true, added: library.addFiles(d.addFiles) });
+          }
+          if (d.remove !== undefined) {
+            if (!strs(d.remove)) return sendJson(400, { error: 'remove must be a list of ids' });
+            return sendJson(200, { ok: true, removed: library.removeItems(d.remove) });
+          }
+        } catch (_) { return sendJson(500, { error: 'could not save' }); }
+        sendJson(400, { error: 'Invalid request' });
+      });
+      return;
+    }
+    res.writeHead(404); res.end('Not found'); return;
+  }
+
   // ── Settings API ───────────────────────────────────────────────────────────
   if (pathname === '/api/settings') {
     if (req.method === 'GET') {
@@ -729,74 +885,5 @@ http.createServer((req, res) => {
     res.writeHead(403); res.end('Forbidden'); return;
   }
 
-  const ext  = path.extname(filePath).toLowerCase();
-  const mime = MIME[ext] || 'application/octet-stream';
-
-  // Archive files: stream with range request support (required for video)
-  fs.stat(filePath, (err, stat) => {
-    if (err) {
-      res.writeHead(err.code === 'ENOENT' ? 404 : 500);
-      res.end(err.code === 'ENOENT' ? 'Not found' : 'Server error');
-      return;
-    }
-
-    const total = stat.size;
-    // Videos and covers never change once downloaded, so let the phone keep them: a looping video then does not
-    // go back to the server on every round. Everything else (the db files, scripts) is revalidated each time.
-    const cacheable = /\.(mp4|jpe?g|png|webp|gif)$/i.test(filePath) && !filePath.includes('.appdata');
-    const etag = `W/"${total}-${Math.floor(stat.mtimeMs)}"`;
-    const base = {
-      'Accept-Ranges': 'bytes',
-      'Content-Type':  mime,
-      'Last-Modified': stat.mtime.toUTCString(),
-      'ETag':          etag,
-      'Cache-Control': cacheable ? 'public, max-age=604800' : 'no-cache',
-    };
-    const range = req.headers['range'];
-
-    if (!range && req.headers['if-none-match'] === etag) { res.writeHead(304, base); res.end(); return; }
-
-    // Stream a file section; when the client drops the request (a phone seeks, a video loops) close the file too
-    const send = (opts) => {
-      if (req.method === 'HEAD') { res.end(); return; }
-      const stream = fs.createReadStream(filePath, opts);
-      stream.on('error', () => res.destroy());
-      res.on('close', () => stream.destroy());
-      stream.pipe(res);
-    };
-
-    if (range) {
-      const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
-      let start = 0, end = total - 1, ok = Boolean(m) && total > 0;
-      if (ok) {
-        if (m[1] === '') { start = Math.max(0, total - parseInt(m[2] || '0', 10)); }
-        else { start = parseInt(m[1], 10); if (m[2]) end = Math.min(parseInt(m[2], 10), total - 1); }
-        ok = start <= end && start < total;
-      }
-      if (!ok) { res.writeHead(416, { 'Content-Range': `bytes */${total}` }); res.end(); return; }
-      res.writeHead(206, Object.assign({}, base, { 'Content-Range': `bytes ${start}-${end}/${total}`, 'Content-Length': end - start + 1 }));
-      send({ start, end });
-    } else if (/\.(js|json|html)$/i.test(filePath) && total >= MIN_GZIP && wantsGzip(req) && req.method !== 'HEAD') {
-      // text from the archive (the db files): compress once per change and keep it, up to a few files
-      const key = filePath + '|' + etag;
-      let gz = gzMemo.get(key);
-      const out = body => {
-        res.writeHead(200, Object.assign({}, base, { 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding', 'Content-Length': body.length }));
-        res.end(body);
-      };
-      if (gz) return out(gz);
-      fs.readFile(filePath, (e2, buf) => {
-        if (e2) { res.writeHead(500); res.end('Server error'); return; }
-        zlib.gzip(buf, { level: 6 }, (e3, z) => {
-          if (e3) { res.writeHead(200, Object.assign({}, base, { 'Content-Length': buf.length })); res.end(buf); return; }
-          if (gzMemo.size >= 12) gzMemo.delete(gzMemo.keys().next().value);
-          gzMemo.set(key, z);
-          out(z);
-        });
-      });
-    } else {
-      res.writeHead(200, Object.assign({}, base, { 'Content-Length': total }));
-      send(undefined);
-    }
-  });
+  serveFile(req, res, filePath);
 }).listen(PORT, () => console.log(`[starplayer] listening on http://localhost:${PORT}`));
