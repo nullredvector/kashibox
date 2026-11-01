@@ -758,7 +758,7 @@ http.createServer((req, res) => {
   // ── Library: videos from folders anywhere in the container ────────────────
   // GET  /api/library                      → { root, dirs, items: [{ id, title, added, size, missing }] }
   // GET  /api/library/browse?path=         → the folders below a folder under the root (Settings picker)
-  // GET  /api/library/files?dir=           → the videos below one chosen source folder, each marked added or not
+  // GET  /api/library/files?dir=[&refresh=1] → the videos of one chosen source folder from its saved index (refresh=1 scans the disk again), each marked added or not
   // POST /api/library { addDir | removeDir | addFiles: [paths] | remove: [ids] }
   // GET  /api/library/videos/<id>.mp4, /api/library/covers/<id>.jpg → the media, by id (never by path)
   // Nothing is ever deleted from disk; "remove" only takes a video out of the library.
@@ -790,9 +790,9 @@ http.createServer((req, res) => {
       return;
     }
     if (pathname === '/api/library/files' && req.method === 'GET') {
-      library.listFiles(String(q.dir || '')).then(r => {
+      library.listFiles(String(q.dir || ''), q.refresh === '1').then(r => {
         if (r.error) return sendJson(404, { error: r.error });
-        sendJson(200, { files: r.files });
+        sendJson(200, { files: r.files, indexedAt: r.indexedAt });
       }).catch(() => sendJson(500, { error: 'UNKNOWN' }));
       return;
     }

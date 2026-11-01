@@ -1691,18 +1691,19 @@
       const allBtn = document.createElement('button'); allBtn.className = 'set-btn'; allBtn.textContent = 'Select all';
       const noneBtn = document.createElement('button'); noneBtn.className = 'set-btn'; noneBtn.textContent = 'Clear';
       const addBtn = document.createElement('button'); addBtn.className = 'set-btn lib-go'; addBtn.disabled = true;
-      bar.append(sel, q, allBtn, noneBtn, addBtn);
+      const refBtn = document.createElement('button'); refBtn.className = 'set-btn'; refBtn.textContent = 'Update index'; refBtn.title = 'Scan the folder again for new or removed files';
+      bar.append(sel, q, allBtn, noneBtn, refBtn, addBtn);
       const info = document.createElement('div'); info.className = 'set-status lib-info';
       const list = document.createElement('div'); list.className = 'lib-list lib-files';
       bodyEl.append(bar, info, list);
-      let files = [], picked = new Set(), shown = [], limit = 300;
+      let files = [], picked = new Set(), shown = [], limit = 300, indexedAt = 0;
       const paintBtn = () => { addBtn.textContent = picked.size ? `Add ${picked.size} video${picked.size !== 1 ? 's' : ''}` : 'Add'; addBtn.disabled = !picked.size; };
       const paint = () => {
         const f = q.value.trim().toLowerCase();
         shown = files.filter(x => !f || x.rel.toLowerCase().includes(f));
         list.innerHTML = '';
         const nNew = files.filter(x => !x.added).length;
-        info.textContent = `${files.length.toLocaleString()} video${files.length !== 1 ? 's' : ''} in this folder, ${nNew.toLocaleString()} not in the library yet.` + (f ? ` ${shown.length.toLocaleString()} match the filter.` : '');
+        info.textContent = `${files.length.toLocaleString()} video${files.length !== 1 ? 's' : ''} in this folder, ${nNew.toLocaleString()} not in the library yet. Index from ${new Date(indexedAt).toLocaleString()}.` + (f ? ` ${shown.length.toLocaleString()} match the filter.` : '');
         allBtn.textContent = f ? `Select all ${shown.filter(x => !x.added).length.toLocaleString()} matching` : 'Select all';
         shown.slice(0, limit).forEach(x => {
           const row = document.createElement('label'); row.className = 'lib-file' + (x.added ? ' in' : '');
@@ -1720,16 +1721,17 @@
         }
         paintBtn();
       };
-      const load = () => {
-        list.textContent = 'Reading the folder…'; picked = new Set(); limit = 300; paintBtn();
-        fetch('/api/library/files?dir=' + encodeURIComponent(sel.value), { cache: 'no-store' }).then(r => r.json().catch(() => ({ error: 'HTTP ' + r.status })))
+      const load = refresh => {
+        list.textContent = refresh ? 'Scanning the folder…' : 'Reading the index…'; picked = new Set(); limit = 300; paintBtn(); refBtn.disabled = true;
+        fetch('/api/library/files?dir=' + encodeURIComponent(sel.value) + (refresh ? '&refresh=1' : ''), { cache: 'no-store' }).then(r => r.json().catch(() => ({ error: 'HTTP ' + r.status })))
           .then(d => {
             if (!d.files) { list.textContent = 'That folder cannot be read (' + (d.error || 'no answer') + ').'; return; }
-            files = d.files.sort((a, b) => a.rel.localeCompare(b.rel, undefined, { numeric: true })); paint();
+            files = d.files.sort((a, b) => a.rel.localeCompare(b.rel, undefined, { numeric: true })); indexedAt = d.indexedAt || 0; refBtn.disabled = false; paint();
           })
           .catch(() => { list.textContent = 'The server did not answer (a very large folder can take a while). Try again.'; });
       };
-      sel.addEventListener('change', load);
+      sel.addEventListener('change', () => load());
+      refBtn.addEventListener('click', () => load(true));
       let t = null; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { limit = 300; paint(); }, 150); });
       allBtn.addEventListener('click', () => { shown.filter(x => !x.added).forEach(x => picked.add(x.path)); paint(); });
       noneBtn.addEventListener('click', () => { picked.clear(); paint(); });
