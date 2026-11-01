@@ -755,7 +755,7 @@ http.createServer((req, res) => {
     return;
   }
 
-  // ── Library: videos from folders mounted under LIBRARY_ROOT ────────────────
+  // ── Library: videos from folders anywhere in the container ────────────────
   // GET  /api/library                      → { root, dirs, items: [{ id, title, added, size, missing }] }
   // GET  /api/library/browse?path=         → the folders below a folder under the root (Settings picker)
   // GET  /api/library/files?dir=           → the videos below one chosen source folder, each marked added or not
@@ -785,7 +785,7 @@ http.createServer((req, res) => {
     }
     if (pathname === '/api/library/browse' && req.method === 'GET') {
       const r = library.browse(String(q.path || ''));
-      if (!r) return sendJson(404, { error: 'No such folder under ' + library.ROOT });
+      if (!r) return sendJson(404, { error: 'That folder cannot be read' });
       sendJson(200, r);
       return;
     }
@@ -811,7 +811,7 @@ http.createServer((req, res) => {
         const strs = a => Array.isArray(a) && a.every(x => typeof x === 'string');
         try {
           if (d.addDir !== undefined) {
-            if (typeof d.addDir !== 'string' || !library.addDir(d.addDir)) return sendJson(400, { error: 'That folder is not under ' + library.ROOT });
+            if (typeof d.addDir !== 'string' || !library.addDir(d.addDir)) return sendJson(400, { error: 'That folder cannot be used' });
             return sendJson(200, { ok: true, dirs: library.sourceDirs() });
           }
           if (d.removeDir !== undefined) {

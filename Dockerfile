@@ -22,8 +22,8 @@ RUN chmod +x /app/entrypoint.sh
 
 ENV ARCHIVE_DIR=/archive
 ENV PORT=8080
-# Folders for the Library are mounted below this one; Settings picks among them
-ENV LIBRARY_ROOT=/library
+# Where Settings -> Library starts browsing
+ENV LIBRARY_START=/library
 
 EXPOSE 8080
 
