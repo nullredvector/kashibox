@@ -1653,7 +1653,8 @@
           });
           if (!d.dirs.length) { const n = document.createElement('div'); n.className = 'hm-note'; n.textContent = 'No folders in here.'; list.appendChild(n); }
           const use = document.createElement('button'); use.className = 'set-btn';
-          use.textContent = d.path === d.root ? 'Use the whole library root' : 'Use this folder';
+          use.textContent = 'Use this folder';
+          use.disabled = d.path === d.root;
           use.addEventListener('click', () => {
             libPost({ addDir: d.path }).then(r => {
               if (r.error) { spToast(r.error); return; }
@@ -1664,7 +1665,7 @@
           const n = document.createElement('span'); n.className = 'set-status';
           n.textContent = d.videos ? `${d.videos} video file${d.videos !== 1 ? 's' : ''} directly in this folder` : '';
           foot.append(use, n);
-        }).catch(() => { list.textContent = 'This folder cannot be read. Is a folder mounted below the library root in the container?'; });
+        }).catch(() => { list.textContent = 'This folder cannot be read. Is the folder mounted in the container?'; });
     };
     go('');
   }
@@ -2144,7 +2145,7 @@
     }
 
     // ── library folders ──
-    const libSec = section('Library', 'Videos from folders mounted into the container (below the library root) can be added to the Library tab, then played and cast like the others. Choose the folders to take videos from, then add the videos you want with + Add videos in the Library tab. Removing a folder here only stops it being offered; videos already in the library stay until you remove them there. Files are never changed or deleted.');
+    const libSec = section('Library', 'Videos from folders in the container (the ones you mounted in compose) can be added to the Library tab, then played and cast like the others. Choose the folders to take videos from, then add the videos you want with + Add videos in the Library tab. Removing a folder here only stops it being offered; videos already in the library stay until you remove them there. Files are never changed or deleted.');
     const libList = document.createElement('div');
     libList.className = 'lib-dirs';
     const libRow = document.createElement('div');
@@ -2160,7 +2161,7 @@
         if (!libList.isConnected) return;
         libList.innerHTML = '';
         const dirs = (libInfo && libInfo.dirs) || [];
-        if (!dirs.length) { const n = document.createElement('div'); n.className = 'set-status'; n.textContent = `No folders chosen yet. Mount folders below ${(libInfo && libInfo.root) || '/library'} in the container.`; libList.appendChild(n); }
+        if (!dirs.length) { const n = document.createElement('div'); n.className = 'set-status'; n.textContent = 'No folders chosen yet. Use Choose a folder to browse the container.'; libList.appendChild(n); }
         dirs.forEach(d => {
           const row = document.createElement('div'); row.className = 'lib-dir-row';
           const name = document.createElement('span'); name.textContent = d;

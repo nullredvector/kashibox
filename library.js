@@ -1,5 +1,5 @@
 'use strict';
-// The Library: video files from folders mounted into the container (under LIBRARY_ROOT, /library by default).
+// The Library: video files from folders mounted into the container (chosen in Settings by browsing the container's filesystem).
 // Settings picks which folders may be used as sources, the Library tab adds individual files to the library, and
 // the library's videos are served through /api/library/videos/<id>.mp4 so they play and cast like the archive's.
 // Nothing here ever deletes or changes a media file; "remove" only forgets it. Folder and file names are shown to
@@ -10,7 +10,11 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const ARCHIVE_DIR = process.env.ARCHIVE_DIR || '/archive';
-const ROOT        = (() => { const r = path.resolve(process.env.LIBRARY_ROOT || '/library'); try { return fs.realpathSync(r); } catch (_) { return r; } })();
+// The picker browses the whole container filesystem (the mounts are wherever compose puts them); it opens at START
+// when that folder exists. The system's own pseudo folders are never offered.
+const ROOT        = path.sep;
+const START       = process.env.LIBRARY_START || '/library';
+const PSEUDO      = ['/proc', '/sys', '/dev'];
 const APPDATA     = path.join(ARCHIVE_DIR, 'data', '.appdata');
 const FILE        = path.join(APPDATA, 'library.json');
 const COVER_DIR   = path.join(APPDATA, 'library-covers');
@@ -19,14 +23,14 @@ const VIDEO_EXT   = /\.(mp4|m4v|mov|webm)$/i;
 const MAX_FILES   = 20000;
 const MAX_DEPTH   = 8;
 
-const within = (p, base) => p === base || p.startsWith(base + path.sep);
+const within = (p, base) => base === path.sep || p === base || p.startsWith(base + path.sep);
 const real = p => { try { return fs.realpathSync(p); } catch (_) { return null; } };
 
-// A folder or file the user may use: it resolves (links followed) to somewhere under the root
+// A folder or file the user may use: it resolves (links followed) to a real place that is not a pseudo folder
 function safe(p) {
-  if (typeof p !== 'string' || !p || p.includes('\0')) return null;
+  if (typeof p !== 'string' || !p || p.includes('\0') || !path.isAbsolute(p)) return null;
   const r = real(p);
-  return r && within(r, ROOT) ? r : null;
+  return r && !PSEUDO.some(x => within(r, x)) ? r : null;
 }
 
 function load() {
@@ -47,7 +51,7 @@ const idFor = file => 'l' + crypto.createHash('sha1').update(file).digest('hex')
 
 // Folders directly below a folder (the settings picker). Hidden folders are left out.
 function browse(p) {
-  const dir = p ? safe(p) : ROOT;
+  const dir = p ? safe(p) : (safe(START) || ROOT);
   if (!dir) return null;
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return null; }
@@ -58,7 +62,7 @@ function browse(p) {
     const full = path.join(dir, e.name);
     let isDir = e.isDirectory();
     if (e.isSymbolicLink()) { try { isDir = fs.statSync(full).isDirectory(); } catch (_) { isDir = false; } }
-    if (isDir) { const r = safe(full); if (r) dirs.push({ name: e.name, path: r }); }
+    if (isDir) { const r = safe(full); if (r && r !== ROOT) dirs.push({ name: e.name, path: r }); }
     else if (VIDEO_EXT.test(e.name)) videos++;
   }
   dirs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
