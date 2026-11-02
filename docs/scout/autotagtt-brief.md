@@ -1,3 +1,5 @@
+> **Superseded.** The scorer no longer builds its score from the user's tags: it is a taste model of the user's super stars (positives = super-starred videos; the rest of the archive is unlabeled), the `score` is a percentile, `tags` is empty and the service learns from decided picks. The HTTP contract below (paths, limits, response shape) is unchanged. See the autotagTT README, section "Scorer service".
+
 # Brief for the autotagTT chat: build the "scorer"
 
 You are working in the **autotagTT** repository. Read [README.md](README.md) (the shared contract) first; this brief is your half of it. kashibox (the viewer) is finished, and the ttpull chat builds the scout that calls you.
