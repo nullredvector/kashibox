@@ -1,0 +1,50 @@
+# Local AI video generation. Nothing leaves this machine:
+#  - kashi-comfy sits only on `genvideo_internal` (internal: true => no route to the internet).
+#  - `gate` is a plain TCP forwarder so you can open the ComfyUI page from the LAN.
+#  - `fetch` (profile "fetch") is the ONLY service with internet access: it downloads model
+#    weights once (downloads only; it has no access to inbox/output). Run it, then stop it.
+# kashibox joins `genvideo_internal` (declare it external there) to reach http://kashi-comfy:8188.
+services:
+  kashi-comfy:
+    container_name: kashi-comfy
+    build: .
+    restart: unless-stopped
+    networks: [genvideo_internal]
+    volumes:
+      - ${GENVIDEO_DIR:-./data}/models:/comfy/models
+      - ${GENVIDEO_DIR:-./data}/inbox:/comfy/input      # clips/frames copied from the archive
+      - ${GENVIDEO_DIR:-./data}/output:/comfy/output
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+
+  gate:
+    image: alpine/socat
+    restart: unless-stopped
+    command: TCP-LISTEN:8188,fork,reuseaddr TCP:kashi-comfy:8188
+    ports:
+      - "8188:8188"
+    networks: [genvideo_internal, default]
+    depends_on: [kashi-comfy]
+    labels:
+      # GoDoxy (host network, reaches container IPs): https://kashicomfy.fexel.net -> gate:8188
+      - proxy.aliases=kashicomfy, kashicomfy.fexel.net
+      - proxy.#1.port=8188
+      - proxy.#2.homepage.show=false
+      - proxy.#2.port=8188
+
+  fetch:
+    profiles: [fetch]
+    build:
+      context: .
+      dockerfile: Dockerfile.fetch
+    networks: [default]
+    volumes:
+      - ${GENVIDEO_DIR:-./data}/models:/models
+      - ./models.txt:/models.txt:ro
+
+networks:
+  genvideo_internal:
+    name: genvideo_internal
+    internal: true

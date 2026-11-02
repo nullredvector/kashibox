@@ -25,6 +25,9 @@ services:
     environment:
       - ARCHIVE_DIR=/archive
       - TTPULL_URL=${TTPULL_URL:-http://ttpull:3847}
+      # Generate from this: the local generator (tools/genvideo, no internet route). Remove to hide the button.
+      - COMFY_URL=http://kashi-comfy:8188
+    networks: [default, genvideo_internal]
     labels:
       - com.centurylinklabs.watchtower.enable=true
 
@@ -38,3 +41,7 @@ services:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_INCLUDE_STOPPED=false
       - WATCHTOWER_LABEL_ENABLE=true
+
+networks:
+  genvideo_internal:
+    external: true

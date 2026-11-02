@@ -1,6 +1,6 @@
 # For You picks: how the three programs fit together
 
-A **suggestion queue**. A scout on the server looks through the site's For You feed, a scorer judges each video by the tags you taught the AI tagger, and kashibox shows the best ones in **the For You tab**. You open a video and like it yourself (or skip it). **Nothing in this system ever likes, follows, comments on or posts anything.**
+A **suggestion queue**. A scout on the server looks through the site's For You feed, a scorer judges each video by how closely its cover resembles your **super stars**, and kashibox shows the best ones in **the For You tab**. You open a video and like it yourself (or skip it). **Nothing in this system ever likes, follows, comments on or posts anything.**
 
 ```
  ttpull container                 autotagTT container                kashibox
@@ -24,7 +24,7 @@ Everything is local. Nothing is uploaded anywhere. The programs talk only throug
 | --- | --- | --- |
 | Queue screen, Settings controls, decision storage, API | kashibox (this repo, done) | this file |
 | The scout: looks through the feed at a human pace, read-only | ttpull | [ttpull-brief.md](ttpull-brief.md) |
-| The scorer: "how well does this cover fit my tags?" | autotagTT | [autotagtt-brief.md](autotagtt-brief.md) |
+| The scorer: "how closely does this cover resemble my super stars?" (a taste model of the super-starred videos, not built from tags) | autotagTT | [autotagtt-brief.md](autotagtt-brief.md) (superseded; see autotagTT's README) |
 
 ## The contract (all three must agree on this)
 
@@ -39,7 +39,7 @@ One JSON object per line, appended. Write the cover file first, then the line. L
 | `author` | string `[A-Za-z0-9_.-]{0,64}` | the creator's username, no `@` |
 | `desc` | string, at most 300 chars | the caption |
 | `score` | number 0..1 | the scorer's score |
-| `tags` | up to 3 of `[name, 0..1]` | why: the best-matching tags |
+| `tags` | up to 3 of `[name, 0..1]` | optional; the scorer now sends none (the score is not built from tags) |
 | `found` | number, ms since epoch | when the scout found it |
 
 The cover image must exist at `scout/covers/<id>.jpg` (kashibox builds that path from the id and ignores any path in the file).
@@ -57,7 +57,7 @@ The cover image must exist at `scout/covers/<id>.jpg` (kashibox builds that path
 ```
 `d` is `liked` (you said it was a good pick), `skipped` (a bad pick: **the only real negative label there is**) or `opened` (you opened it but have not decided). A candidate whose id appears in the archive's Likes list also counts as liked: that is the strongest signal, because you really liked it on the site.
 
-`tagFeedback` is your answer on each tag the scorer named for a pick: `1` = the video does fit that tag, `-1` = it does not. These are real labels for those tags (independent of liked/skipped), and the best signal for fixing a tag's classifier. `opened` is only a mark on the card; the pick stays pending until you choose.
+`tagFeedback` is your answer on each tag the scorer named for a pick (`1` fits, `-1` does not). The super-star scorer names no tags, so it stays empty. `opened` is only a mark on the card; the pick stays pending until you choose.
 
 **Videos the scout saw but never suggested are not negatives.** The scout saw them, you did not. Treat them as unlabeled.
 
@@ -74,7 +74,7 @@ Read it at the start of every loop, so changes apply within a minute. A missing 
 ### The scorer's HTTP call (scout -> autotagTT, inside the compose network)
 `POST http://autotagtt:8090/score?id=<video id>` with the cover image bytes as the body (`Content-Type: image/jpeg`).
 Response: `{"score": 0.83, "tags": [["tagname", 0.91], ["tagname2", 0.74]], "model": "2026-10-24-a1b2c3"}`.
-`GET http://autotagtt:8090/health` returns `{"ok": true, "ready": true, "model": "...", "tags": 3}` (`ready: false` while it is still loading).
+`GET http://autotagtt:8090/health` returns `{"ok": true, "ready": true, "model": "...", "tags": 1}` (`ready: false` while it is still loading; `tags` is 1 when the super-star model is loaded, 0 when there is none yet and every score is 0). The `score` is a **percentile**: how much more a cover resembles your super stars than the rest of your archive does.
 
 ## Hard rules for the whole system
 1. **Read-only on the site.** Never like, unlike, follow, comment, share, save or post. Only load the feed and download cover images.
@@ -84,8 +84,8 @@ Response: `{"score": 0.83, "tags": [["tagname", 0.91], ["tagname2", 0.74]], "mod
 
 ## Turning it on (in this order)
 1. Deploy kashibox (this repo), then autotagTT, then ttpull. Each new version does nothing different until the next steps; the scout is off by default.
-2. **Train once in autotagTT** (Review -> `Run...` -> train). The scorer has no models until a training run has finished after the update, and until then it scores everything 0, so the scout would suggest nothing.
-3. Check that ttpull can reach the scorer: `GET /health` on `http://autotagtt:8090` should say `ready: true` with at least one tag.
+2. **Train once in autotagTT** (Review -> `Run...` -> Run now). The super-star model is trained at the start of a run; until then the scorer scores everything 0 (it needs at least 30 super stars with covers), so the scout would suggest nothing.
+3. Check that ttpull can reach the scorer: `GET /health` on `http://autotagtt:8090` should say `ready: true` and `tags: 1`.
 4. Try it dry: in the ttpull container's environment set `SCOUT=on` and `SCOUT_DRY=1`, switch **Settings -> For You scout** on in kashibox, and read the `[scout]` lines in ttpull's log. It logs what it would suggest and writes nothing.
 5. When that looks right, remove `SCOUT_DRY` (keep `SCOUT=on`). Picks start to appear in the For You tab.
 6. Turn it off at any time with the Settings switch (within a minute) or `SCOUT=off`. After any stop (verification screen, login prompt, error) it stays stopped for 6 hours, or until you switch it off and on again.
