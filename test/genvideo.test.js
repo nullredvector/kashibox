@@ -37,3 +37,26 @@ test('extend keeps the last frames of the source and crops the guide before deco
 test('unknown mode is rejected', () => {
   assert.throws(() => buildGraph('nope', 'x'));
 });
+
+test('LTX 2.3 graphs are connected, carry sound and use the distilled schedule', () => {
+  for (const m of MODES) {
+    const g = buildGraph(m, 'in.mp4', { model: 'ltx23', prompt: 'x', seed: 1, sourceFrames: 95, frames: 49 });
+    links(g);
+    assert.strictEqual(g.save.class_type, 'VHS_VideoCombine');
+    assert.deepStrictEqual(g.save.inputs.audio, ['sound', 0]);
+    assert.strictEqual(g.unet.class_type, 'UnetLoaderGGUF');
+  }
+});
+
+test('LTX 2.3 restyle starts lower down the schedule when it changes less', () => {
+  const sig = (d) => buildGraph('restyle', 'in.mp4', { model: 'ltx23', denoise: d, frames: 49 }).sigmas.inputs.sigmas.split(', ').map(Number);
+  assert.strictEqual(sig(0.6)[0], 0.6);
+  assert.ok(sig(0.6).length < sig(0.9).length);
+  assert.strictEqual(sig(0.6).at(-1), 0);
+});
+
+test('LTX 2.3 extend keeps the last frames and crops the guide', () => {
+  const g = buildGraph('extend', 'in.mp4', { model: 'ltx23', sourceFrames: 100, guideFrames: 9 });
+  assert.strictEqual(g.tail.inputs.batch_index, 91);
+  assert.deepStrictEqual(g.decode.inputs.samples, ['crop', 2]);
+});

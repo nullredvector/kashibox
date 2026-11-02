@@ -534,7 +534,7 @@ http.createServer((req, res) => {
 
   // ── Generate from this: new videos made locally from an archive video (gen_jobs.js, genvideo.js) ──
   // GET  /api/gen                     → { enabled, jobs: [{ id, mode, state, libId? }] }
-  // POST /api/gen { src, mode, at, prompt?, denoise? } → { id }; the result is added to the Library when done
+  // POST /api/gen { src, mode, at, prompt?, denoise?, model? ('ltx2b' fast | 'ltx23' better) } → { id }; the result is added to the Library when done
   // Same-origin JSON only. Nothing leaves the machine except to the local generator (COMFY_URL).
   if (pathname === '/api/gen') {
     const sendJson = (code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
@@ -552,7 +552,7 @@ http.createServer((req, res) => {
       let d;
       try { d = JSON.parse(Buffer.concat(chunks).toString()); } catch (_) { return sendJson(400, { error: 'Invalid JSON' }); }
       if (!d || typeof d !== 'object' || Array.isArray(d)) return sendJson(400, { error: 'Invalid JSON' });
-      const r = genJobs.start({ src: d.src, mode: d.mode, at: d.at, prompt: d.prompt, denoise: d.denoise });
+      const r = genJobs.start({ src: d.src, mode: d.mode, at: d.at, prompt: d.prompt, denoise: d.denoise, model: d.model });
       sendJson(r.error ? 400 : 202, r);
     });
     return;

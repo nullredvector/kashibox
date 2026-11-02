@@ -14,6 +14,19 @@ const COMFY_URL = (process.env.COMFY_URL || 'http://kashi-comfy:8188').replace(/
 const CKPT = process.env.GENVIDEO_CKPT || 'ltxv-2b-0.9.8-distilled.safetensors';
 const TEXT_ENCODER = process.env.GENVIDEO_TEXT_ENCODER || 't5xxl_fp16.safetensors';
 
+const MODELS = ['ltx2b', 'ltx23'];   // ltx2b: LTX-Video 2B distilled (fast); ltx23: LTX 2.3 22B GGUF + distilled LoRA (better, slower, with sound)
+const MODEL = MODELS.includes(process.env.GENVIDEO_MODEL) ? process.env.GENVIDEO_MODEL : 'ltx2b';
+const F23 = {
+  unet: process.env.GENVIDEO_23_UNET || 'newmodel.gguf',
+  lora: process.env.GENVIDEO_23_LORA || 'ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors',
+  text: process.env.GENVIDEO_23_TEXT || 'gemma-3-12b-it-heretic-v2_fp8_e4m3fn.safetensors',
+  proj: process.env.GENVIDEO_23_PROJ || 'ltx-2.3_text_projection_bf16.safetensors',
+  vae: process.env.GENVIDEO_23_VAE || 'ltx-2.3-22b-distilled_video_vae.safetensors',
+  avae: process.env.GENVIDEO_23_AVAE || 'ltx-2.3-22b-distilled_audio_vae.safetensors',
+};
+// the distilled schedule (8 steps); restyle starts part-way down it
+const SIGMAS23 = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0];
+
 const MODES = ['i2v', 'extend', 'restyle'];
 const DEFAULTS = {
   width: 480, height: 832,   // multiples of 32; portrait like the archive's clips
@@ -29,6 +42,7 @@ function snap(n, m) { return Math.max(m, Math.round(n / m) * m); }
 // Builds a ComfyUI API graph. `input` is the file name already in the instance's input folder.
 function buildGraph(mode, input, o = {}) {
   if (!MODES.includes(mode)) throw new Error('unknown mode ' + mode);
+  if ((o.model || MODEL) === 'ltx23') return buildGraph23(mode, input, o);
   const p = { ...DEFAULTS, ...o };
   const w = snap(p.width, 32), h = snap(p.height, 32);
   const frames = Math.max(9, Math.round((p.frames - 1) / 8) * 8 + 1);
@@ -94,6 +108,73 @@ function buildGraph(mode, input, o = {}) {
   return g;
 }
 
+// LTX 2.3 (audio + video). Same three modes; the picture and the sound are made together.
+function buildGraph23(mode, input, o = {}) {
+  const p = { ...DEFAULTS, steps: 8, ...o };
+  const w = snap(p.width, 32), h = snap(p.height, 32);
+  const frames = Math.max(9, Math.round((p.frames - 1) / 8) * 8 + 1);
+  const seed = Number.isFinite(p.seed) ? p.seed : Math.floor(Math.random() * 2 ** 31);
+  const g = {
+    unet: { class_type: 'UnetLoaderGGUF', inputs: { unet_name: F23.unet } },
+    lora: { class_type: 'LoraLoaderModelOnly', inputs: { model: ['unet', 0], lora_name: F23.lora, strength_model: 0.6 } },
+    clip: { class_type: 'DualCLIPLoader', inputs: { clip_name1: F23.text, clip_name2: F23.proj, type: 'ltxv', device: 'default' } },
+    vae: { class_type: 'VAELoader', inputs: { vae_name: F23.vae } },
+    avae: { class_type: 'LTXVAudioVAELoader', inputs: { ckpt_name: F23.avae } },
+    pos: { class_type: 'CLIPTextEncode', inputs: { text: p.prompt, clip: ['clip', 0] } },
+    neg: { class_type: 'CLIPTextEncode', inputs: { text: p.negative, clip: ['clip', 0] } },
+    cond: { class_type: 'LTXVConditioning', inputs: { positive: ['pos', 0], negative: ['neg', 0], frame_rate: p.fps } },
+  };
+  let pos = ['cond', 0], neg = ['cond', 1], latent, crop = false, sigmas = SIGMAS23;
+
+  if (mode === 'i2v') {
+    g.img = { class_type: 'LoadImage', inputs: { image: input } };
+    g.rs = { class_type: 'ImageScale', inputs: { image: ['img', 0], upscale_method: 'lanczos', width: w, height: h, crop: 'center' } };
+    g.prep = { class_type: 'LTXVPreprocess', inputs: { image: ['rs', 0], img_compression: 22 } };
+    g.empty = { class_type: 'EmptyLTXVLatentVideo', inputs: { width: w, height: h, length: frames, batch_size: 1 } };
+    g.start = { class_type: 'LTXVImgToVideoInplace', inputs: { vae: ['vae', 0], image: ['prep', 0], latent: ['empty', 0], strength: 1, bypass: false } };
+    latent = ['start', 0];
+  } else {
+    g.src = { class_type: 'VHS_LoadVideo', inputs: {
+      video: input, force_rate: p.fps, custom_width: w, custom_height: h,
+      frame_load_cap: mode === 'restyle' ? frames : 0, skip_first_frames: 0, select_every_nth: 1 } };
+    if (mode === 'extend') {
+      const n = Math.max(1, Math.round((p.guideFrames - 1) / 8) * 8 + 1);
+      const total = p.sourceFrames || n;
+      g.tail = { class_type: 'ImageFromBatch', inputs: { image: ['src', 0], batch_index: Math.max(0, total - n), length: n } };
+      g.empty = { class_type: 'EmptyLTXVLatentVideo', inputs: { width: w, height: h, length: frames, batch_size: 1 } };
+      g.guide = { class_type: 'LTXVAddGuide', inputs: {
+        positive: pos, negative: neg, vae: ['vae', 0], latent: ['empty', 0], image: ['tail', 0], frame_idx: 0, strength: 1 } };
+      pos = ['guide', 0]; neg = ['guide', 1]; latent = ['guide', 2]; crop = true;
+    } else {
+      g.enc = { class_type: 'VAEEncode', inputs: { pixels: ['src', 0], vae: ['vae', 0] } };
+      latent = ['enc', 0];
+      // start part-way down the schedule: a lower start keeps more of the source
+      const d = Math.min(0.95, Math.max(0.2, p.denoise));
+      sigmas = [d, ...SIGMAS23.filter((x) => x < d)];
+    }
+  }
+  g.aud = { class_type: 'LTXVEmptyLatentAudio', inputs: { frames_number: frames, frame_rate: p.fps, batch_size: 1, audio_vae: ['avae', 0] } };
+  g.cat = { class_type: 'LTXVConcatAVLatent', inputs: { video_latent: latent, audio_latent: ['aud', 0] } };
+  g.guider = { class_type: 'CFGGuider', inputs: { model: ['lora', 0], positive: pos, negative: neg, cfg: 1 } };
+  g.sigmas = { class_type: 'ManualSigmas', inputs: { sigmas: sigmas.join(', ') } };
+  g.ks = { class_type: 'KSamplerSelect', inputs: { sampler_name: 'euler' } };
+  g.noise = { class_type: 'RandomNoise', inputs: { noise_seed: seed } };
+  g.sample = { class_type: 'SamplerCustomAdvanced', inputs: {
+    noise: ['noise', 0], guider: ['guider', 0], sampler: ['ks', 0], sigmas: ['sigmas', 0], latent_image: ['cat', 0] } };
+  g.sep = { class_type: 'LTXVSeparateAVLatent', inputs: { av_latent: ['sample', 0] } };
+  let out = ['sep', 0];
+  if (crop) {
+    g.crop = { class_type: 'LTXVCropGuides', inputs: { positive: pos, negative: neg, latent: out } };
+    out = ['crop', 2];
+  }
+  g.decode = { class_type: 'VAEDecodeTiled', inputs: { samples: out, vae: ['vae', 0], tile_size: 512, overlap: 64, temporal_size: 4096, temporal_overlap: 8 } };
+  g.sound = { class_type: 'LTXVAudioVAEDecode', inputs: { samples: ['sep', 1], audio_vae: ['avae', 0] } };
+  g.save = { class_type: 'VHS_VideoCombine', inputs: {
+    images: ['decode', 0], audio: ['sound', 0], frame_rate: p.fps, loop_count: 0, filename_prefix: 'gen/' + mode,
+    format: 'video/h264-mp4', pingpong: false, save_output: true } };
+  return g;
+}
+
 async function api(p, init) {
   const r = await fetch(COMFY_URL + p, init);
   if (!r.ok) throw new Error(`${p}: ${r.status} ${(await r.text()).slice(0, 300)}`);
@@ -142,7 +223,7 @@ async function generate(mode, inputFile, outFile, opts = {}) {
   return download(res, outFile);
 }
 
-module.exports = { MODES, DEFAULTS, buildGraph, upload, runGraph, download, generate, COMFY_URL };
+module.exports = { MODELS, MODEL, MODES, DEFAULTS, buildGraph, upload, runGraph, download, generate, COMFY_URL };
 
 if (require.main === module) {
   const [mode, input, out, ...rest] = process.argv.slice(2);

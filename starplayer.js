@@ -4382,6 +4382,12 @@
       lab.querySelector('input').addEventListener('change', () => { mode = id; strength.style.display = id === 'restyle' ? '' : 'none'; });
       opts.appendChild(lab);
     });
+    let model = 'ltx2b';
+    const quality = document.createElement('label');
+    quality.style.cssText = 'display:block;margin-top:8px;opacity:.85';
+    quality.innerHTML = 'Quality <select style="margin-left:6px;padding:4px 6px;border-radius:6px;border:1px solid #444;background:#111;color:#fff;font:inherit">'
+      + '<option value="ltx2b">Fast (about a minute)</option><option value="ltx23">Better, with sound (several minutes)</option></select>';
+    quality.querySelector('select').addEventListener('change', e => { model = e.target.value; });
     const prompt = document.createElement('textarea');
     prompt.rows = 2; prompt.placeholder = 'Describe it (optional)';
     prompt.style.cssText = 'width:100%;box-sizing:border-box;margin-top:6px;padding:8px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;font:inherit';
@@ -4400,7 +4406,7 @@
       go.disabled = true;
       try {
         const r = await fetch('/api/gen', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ src, mode, at, prompt: prompt.value, denoise: Number(strength.querySelector('input').value) }) });
+          body: JSON.stringify({ src, mode, at, model, prompt: prompt.value, denoise: Number(strength.querySelector('input').value) }) });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || 'failed');
         wrap.remove();
@@ -4409,7 +4415,7 @@
       } catch (e) { go.disabled = false; spToast(e.message || 'Could not start'); }
     });
     row.append(cancel, go);
-    box.append(opts, prompt, strength, row);
+    box.append(opts, quality, prompt, strength, row);
     wrap.appendChild(box);
     document.body.appendChild(wrap);
   }
