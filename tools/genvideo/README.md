@@ -22,3 +22,11 @@ COMFY_URL=https://kashicomfy.fexel.net node genvideo.js <i2v|extend|restyle> <in
 3. `restyle`: the clip as the motion source; `denoise` lower keeps more of the source.
 
 A 49-frame 480x832 clip takes about 20 s with the distilled 2B model. Input is uploaded only to kashi-comfy (no internet route); results are fetched back.
+
+## LTX 2.3 (better, with sound)
+
+The dialog's "Quality" menu picks the model per job (`model: 'ltx2b'` fast, `'ltx23'` better); `GENVIDEO_MODEL` sets the default. `ltx23` uses the 22B GGUF through ComfyUI-GGUF with the small distilled LoRA, the Gemma encoder plus text projection, and separate video/audio VAEs (all in `models.txt`; file names can be overridden with `GENVIDEO_23_UNET`, `_LORA`, `_TEXT`, `_PROJ`, `_VAE`, `_AVAE`).
+
+Folder layout the loaders expect: the GGUF is linked into `models/diffusion_models/`, the audio VAE into `models/checkpoints/` (both are symlinks to the real files).
+
+On one 11 GB card ComfyUI runs with `--disable-dynamic-vram --reserve-vram 1.5` (see `docker-compose.yml`): without them the sampler runs out of GPU memory. Jobs use 49 frames at about 384x672 (portrait); a warm run takes roughly 30-75 s, the first after a restart a few minutes.

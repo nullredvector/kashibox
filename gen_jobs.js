@@ -56,7 +56,10 @@ async function work(job, srcFile, opts) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kgen-'));
   try {
     const { w, h } = await probeSize(srcFile);
-    const size = h > w * 1.1 ? { width: 480, height: 832 } : w > h * 1.1 ? { width: 832, height: 480 } : { width: 640, height: 640 };
+    const big = opts.model === 'ltx23';   // the 22B model is slow on one 11 GB card: smaller pictures, shorter clips
+    const size = h > w * 1.1 ? (big ? { width: 384, height: 672 } : { width: 480, height: 832 })
+      : w > h * 1.1 ? (big ? { width: 672, height: 384 } : { width: 832, height: 480 })
+      : (big ? { width: 512, height: 512 } : { width: 640, height: 640 });
     const at = Math.max(0, Number(opts.at) || 0);
     let input;
     if (job.mode === 'i2v') {
@@ -70,7 +73,8 @@ async function work(job, srcFile, opts) {
     }
     fs.mkdirSync(OUT_DIR, { recursive: true });
     const out = path.join(OUT_DIR, 'g' + job.id + '-' + job.mode + '.mp4');
-    const o = { ...size, prompt: String(opts.prompt || '').slice(0, 500) };
+    const o = { ...size, prompt: String(opts.prompt || '').slice(0, 500), model: opts.model };
+    if (big) o.frames = 49;
     if (job.mode === 'restyle' && Number.isFinite(opts.denoise)) o.denoise = Math.min(0.95, Math.max(0.2, opts.denoise));
     await genvideo.generate(job.mode, input, out, o);
     job.libId = library.addGenerated(out);
@@ -99,15 +103,16 @@ async function pump() {
 }
 
 // Returns { id } or { error }
-function start({ src, mode, at, prompt, denoise }) {
+function start({ src, mode, at, prompt, denoise, model }) {
   if (!ENABLED) return { error: 'Video generation is not set up' };
   if (!MODES.includes(mode)) return { error: 'Unknown mode' };
   const file = resolveSource(src);
   if (!file) return { error: 'Video not found' };
+  if (model !== undefined && !genvideo.MODELS.includes(model)) return { error: 'Unknown model' };
   if (jobs.filter(j => j.state === 'queued' || j.state === 'running').length >= 5) return { error: 'Too many waiting' };
   const job = { id: Date.now().toString(36) + (++seq).toString(36), mode, state: 'queued', at: Date.now() };
   Object.defineProperty(job, '_src', { value: file, writable: true, configurable: true, enumerable: false });
-  Object.defineProperty(job, '_opts', { value: { at, prompt, denoise }, writable: true, configurable: true, enumerable: false });
+  Object.defineProperty(job, '_opts', { value: { at, prompt, denoise, model: model || genvideo.MODEL }, writable: true, configurable: true, enumerable: false });
   jobs.push(job);
   pump();
   return { id: job.id };

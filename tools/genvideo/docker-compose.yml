@@ -9,6 +9,10 @@ services:
     container_name: kashi-comfy
     build: .
     restart: unless-stopped
+    # the 22B video model does not fit 11 GB: classic offloading is steadier than dynamic VRAM here
+    command: python main.py --listen 0.0.0.0 --port 8188 --disable-auto-launch --disable-dynamic-vram --reserve-vram 1.5
+    environment:
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
     networks: [genvideo_internal]
     volumes:
       - ${GENVIDEO_DIR:-./data}/models:/comfy/models
