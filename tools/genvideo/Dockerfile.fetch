@@ -1,0 +1,4 @@
+FROM python:3.12-slim
+RUN pip install --no-cache-dir "huggingface_hub>=0.24"
+COPY fetch_models.py /fetch_models.py
+CMD ["python", "/fetch_models.py", "/models.txt", "/models"]

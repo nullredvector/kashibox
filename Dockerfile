@@ -12,6 +12,8 @@ COPY db_stars.js   ./db_stars.js
 COPY tv_author.js  ./tv_author.js
 COPY tv_sessions.js ./tv_sessions.js
 COPY library.js    ./library.js
+COPY genvideo.js   ./genvideo.js
+COPY gen_jobs.js   ./gen_jobs.js
 COPY scout_store.js ./scout_store.js
 COPY entrypoint.sh ./entrypoint.sh
 COPY assets        ./assets

@@ -1000,6 +1000,14 @@
     hideBtn.innerHTML = HIDE_SVG;
     hideBtn.addEventListener('click', e => { e.stopPropagation(); hideVideo(item.id); closeVideoOverlay(); });
     rightCenter.appendChild(hideBtn);
+    if (genEnabled) {
+      const genBtn = document.createElement('button');
+      genBtn.className = 'overlay-ctrl-btn overlay-gen-btn';
+      genBtn.title = 'Generate a new video from this one';
+      genBtn.innerHTML = GEN_SVG;
+      genBtn.addEventListener('click', e => { e.stopPropagation(); showGenerateDialog(item.videoPath, () => video.currentTime); });
+      rightCenter.appendChild(genBtn);
+    }
     controls.appendChild(rightCenter);
 
     // Bottom-left: author + caption
@@ -4323,6 +4331,87 @@
     }
     document.body.appendChild(t);
     setTimeout(() => t.remove(), 2600);
+  }
+
+  // ── Generate from this: new videos made locally from the video on screen (server: gen_jobs.js) ──
+  // Offered only when the server has a local generator set up (COMFY_URL). The result lands in the Library.
+  const GEN_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2l1.9 5.6L19.5 9.5l-5.6 1.9L12 17l-1.9-5.6L4.5 9.5l5.6-1.9z"/><path d="M19 15l.9 2.6 2.6.9-2.6.9L19 22l-.9-2.6-2.6-.9 2.6-.9z"/></svg>';
+  const GEN_MODES = [
+    ['i2v', 'Animate this frame', 'The frame on screen becomes a short new clip.'],
+    ['extend', 'Continue the clip', 'Picks up where the video is now and makes what comes next.'],
+    ['restyle', 'Restyle', 'Keeps the motion of the next few seconds and changes the look.'],
+  ];
+  let genEnabled = false, genPolling = false, genSeen = {};
+  fetch('/api/gen', { cache: 'no-store' }).then(r => r.json()).then(d => { genEnabled = !!(d && d.enabled); }).catch(() => {});
+
+  function genPoll() {
+    if (genPolling) return;
+    genPolling = true;
+    const tick = async () => {
+      let d = null;
+      try { d = await (await fetch('/api/gen', { cache: 'no-store' })).json(); } catch (_) {}
+      const jobs = (d && d.jobs) || [];
+      jobs.forEach(j => {
+        const prev = genSeen[j.id];
+        genSeen[j.id] = j.state;
+        if (!prev || prev === j.state) return;
+        if (j.state === 'done') { spToast('Generated video added to Library'); try { loadLibrary(true); } catch (_) {} }
+        if (j.state === 'failed') spToast('Generation failed');
+      });
+      if (jobs.some(j => j.state === 'queued' || j.state === 'running')) setTimeout(tick, 4000); else genPolling = false;
+    };
+    tick();
+  }
+
+  function showGenerateDialog(src, getTime) {
+    document.getElementById('sp-gen')?.remove();
+    const at = Math.max(0, getTime ? getTime() : 0);
+    const wrap = document.createElement('div');
+    wrap.id = 'sp-gen';
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#1c1c1e;color:#fff;border-radius:14px;padding:18px;width:min(420px,100%);max-height:100%;overflow:auto;font:14px system-ui,sans-serif';
+    let mode = 'i2v';
+    box.innerHTML = '<div style="font-size:16px;font-weight:600;margin-bottom:4px">Generate from this</div>'
+      + '<div style="opacity:.65;margin-bottom:12px">Made on your own machine. Nothing is uploaded.</div>';
+    const opts = document.createElement('div');
+    GEN_MODES.forEach(([id, name, hint]) => {
+      const lab = document.createElement('label');
+      lab.style.cssText = 'display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer';
+      lab.innerHTML = '<input type="radio" name="sp-gen-mode" style="margin-top:3px"' + (id === mode ? ' checked' : '') + '><span><b>' + name + '</b><br><span style="opacity:.65">' + hint + '</span></span>';
+      lab.querySelector('input').addEventListener('change', () => { mode = id; strength.style.display = id === 'restyle' ? '' : 'none'; });
+      opts.appendChild(lab);
+    });
+    const prompt = document.createElement('textarea');
+    prompt.rows = 2; prompt.placeholder = 'Describe it (optional)';
+    prompt.style.cssText = 'width:100%;box-sizing:border-box;margin-top:6px;padding:8px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;font:inherit';
+    const strength = document.createElement('label');
+    strength.style.cssText = 'display:none;margin-top:8px;opacity:.85';
+    strength.innerHTML = 'How much to change <input type="range" min="0.3" max="0.9" step="0.05" value="0.6" style="width:100%">';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:14px';
+    const cancel = document.createElement('button'), go = document.createElement('button');
+    cancel.textContent = 'Cancel'; go.textContent = 'Generate';
+    [cancel, go].forEach(b => { b.style.cssText = 'padding:8px 16px;border-radius:8px;border:none;font:inherit;cursor:pointer;color:#fff;background:#3a3a3c'; });
+    go.style.background = '#0a84ff';
+    cancel.addEventListener('click', () => wrap.remove());
+    wrap.addEventListener('click', e => { if (e.target === wrap) wrap.remove(); });
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      try {
+        const r = await fetch('/api/gen', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ src, mode, at, prompt: prompt.value, denoise: Number(strength.querySelector('input').value) }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'failed');
+        wrap.remove();
+        spToast('Generating… it will appear in Library');
+        genPoll();
+      } catch (e) { go.disabled = false; spToast(e.message || 'Could not start'); }
+    });
+    row.append(cancel, go);
+    box.append(opts, prompt, strength, row);
+    wrap.appendChild(box);
+    document.body.appendChild(wrap);
   }
 
   // Builds the tag button plus its sheet and radial. host = the player view; getVideoId() = the video on screen.
@@ -8852,7 +8941,7 @@ render();
       .thumb-tool:hover { background: rgba(0,0,0,.9); color: #fff; }
       .thumb-star.on { color: gold; }
       .thumb-hide svg { width: 58%; height: 58%; }
-      .overlay-hide-btn, .player-hide-btn { color: #fff; }
+      .overlay-hide-btn, .player-hide-btn, .overlay-gen-btn { color: #fff; }
       #sp-hidden-mgr { position: fixed; inset: 0; z-index: 100000; background: rgba(0,0,0,.94); display: flex; flex-direction: column; color: #ddd; }
       #sp-hidden-mgr .hm-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #444; flex-wrap: wrap; }
       #sp-hidden-mgr .hm-title { font-size: 18px; font-weight: 600; flex: 1; min-width: 140px; }

@@ -1,0 +1,7 @@
+# repo  file  destination (under models/)   (names checked against the model pages)
+# Image->video, extend, and restyle with LTX-Video (small, fits 11 GB)
+Lightricks/LTX-Video  ltxv-2b-0.9.8-distilled.safetensors  checkpoints
+Lightricks/LTX-Video  ltx-video-2b-v0.9.5.safetensors  checkpoints
+comfyanonymous/flux_text_encoders  t5xxl_fp16.safetensors  text_encoders
+# Wan 2.2 5B (text+image->video) and Wan VACE (restyle/extend with a control video):
+# add the GGUF quantized files here once the exact names are picked (Q4/Q5 for 11 GB).

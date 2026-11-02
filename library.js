@@ -189,6 +189,16 @@ function addFiles(files) {
   return added;
 }
 
+// A video this app made itself (in the appdata "generated" folder) goes straight into the library
+function addGenerated(file) {
+  const r = safe(file);
+  if (!r || !VIDEO_EXT.test(r) || !within(r, path.join(real(APPDATA) || APPDATA, 'generated'))) return null;
+  const cur = load();
+  const id = idFor(r);
+  if (!cur.items[id]) { cur.items[id] = { path: r, added: Date.now() }; save(cur); }
+  return id;
+}
+
 function removeItems(ids) {
   const cur = load();
   let n = 0;
@@ -255,4 +265,4 @@ function coverFor(id) {
   return p;
 }
 
-module.exports = { ROOT, browse, listFiles, addDir, removeDir, addFiles, removeItems, list, fileFor, coverFor, sourceDirs };
+module.exports = { addGenerated, ROOT, browse, listFiles, addDir, removeDir, addFiles, removeItems, list, fileFor, coverFor, sourceDirs };

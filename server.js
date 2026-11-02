@@ -9,6 +9,7 @@ const dbStars  = require('./db_stars');
 const tvAuthor = require('./tv_author');
 const tvSessions = require('./tv_sessions');
 const library  = require('./library');
+const genJobs  = require('./gen_jobs');
 const scoutStore = require('./scout_store');
 
 const ARCHIVE_DIR = process.env.ARCHIVE_DIR || '/archive';
@@ -527,6 +528,32 @@ http.createServer((req, res) => {
       if (!lists || (d.clear !== undefined && typeof d.clear !== 'boolean')) return sendJson(400, { error: 'add and remove must be lists of up to 5000 ids, clear a boolean' });
       try { sendJson(200, { hidden: dbStars.updateHidden({ add: d.add, remove: d.remove, clear: d.clear }) }); }
       catch (_) { sendJson(500, { error: 'could not save' }); }
+    });
+    return;
+  }
+
+  // ── Generate from this: new videos made locally from an archive video (gen_jobs.js, genvideo.js) ──
+  // GET  /api/gen                     → { enabled, jobs: [{ id, mode, state, libId? }] }
+  // POST /api/gen { src, mode, at, prompt?, denoise? } → { id }; the result is added to the Library when done
+  // Same-origin JSON only. Nothing leaves the machine except to the local generator (COMFY_URL).
+  if (pathname === '/api/gen') {
+    const sendJson = (code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
+    if (req.method === 'GET') return sendJson(200, { enabled: genJobs.ENABLED, jobs: genJobs.list() });
+    if (req.method !== 'POST') { res.writeHead(405); res.end('Method not allowed'); return; }
+    const origin = req.headers['origin'];
+    let sameOrigin = true;
+    if (origin) { try { sameOrigin = new URL(origin).host === req.headers['host']; } catch (_) { sameOrigin = false; } }
+    if (!sameOrigin) return sendJson(403, { error: 'cross-origin request refused' });
+    if (!/^application\/json/i.test(req.headers['content-type'] || '')) return sendJson(415, { error: 'JSON required' });
+    let size = 0, chunks = [], tooBig = false;
+    req.on('data', c => { size += c.length; if (size > 1e5) tooBig = true; else chunks.push(c); });
+    req.on('end', () => {
+      if (tooBig) return sendJson(413, { error: 'body too large' });
+      let d;
+      try { d = JSON.parse(Buffer.concat(chunks).toString()); } catch (_) { return sendJson(400, { error: 'Invalid JSON' }); }
+      if (!d || typeof d !== 'object' || Array.isArray(d)) return sendJson(400, { error: 'Invalid JSON' });
+      const r = genJobs.start({ src: d.src, mode: d.mode, at: d.at, prompt: d.prompt, denoise: d.denoise });
+      sendJson(r.error ? 400 : 202, r);
     });
     return;
   }
