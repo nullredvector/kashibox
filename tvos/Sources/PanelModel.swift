@@ -3,7 +3,7 @@ import SwiftUI
 struct VideoRef: Decodable, Equatable {
     let videoUrl: String
     let coverUrl: String
-    /// A landscape video: its panel gets two panes of room and the picture is not cropped.
+    /// A landscape video: its panel gets two panes of room.
     let wide: Bool
 
     init(videoUrl: String, coverUrl: String, wide: Bool = false) {
