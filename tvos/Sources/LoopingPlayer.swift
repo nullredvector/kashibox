@@ -6,10 +6,12 @@ final class PlayerView: UIView {
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 }
 
-/// An endlessly looping video that fills its frame.
+/// An endlessly looping video.
 struct LoopingPlayer: UIViewRepresentable {
     let url: URL?
     let muted: Bool
+    /// true = fill the frame (crops); false = show the whole picture
+    let fill: Bool
     let onReady: () -> Void
 
     final class Coordinator {
@@ -22,7 +24,7 @@ struct LoopingPlayer: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PlayerView {
         let view = PlayerView()
-        view.playerLayer.videoGravity = .resizeAspectFill
+        view.playerLayer.videoGravity = fill ? .resizeAspectFill : .resizeAspect
         guard let url else { return view }
 
         let player = AVQueuePlayer()

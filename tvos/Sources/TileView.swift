@@ -7,15 +7,16 @@ private struct VideoSurface: View {
     let video: VideoRef
     let muted: Bool
     @State private var ready = false
+    private var fill: Bool { !video.wide }
 
     var body: some View {
         ZStack {
-            LoopingPlayer(url: Config.url(video.videoUrl), muted: muted) {
+            LoopingPlayer(url: Config.url(video.videoUrl), muted: muted, fill: fill) {
                 withAnimation(.easeOut(duration: 0.5)) { ready = true }
             }
             if !ready, let cover = Config.url(video.coverUrl) {
                 AsyncImage(url: cover) { image in
-                    image.resizable().aspectRatio(contentMode: .fill)
+                    image.resizable().aspectRatio(contentMode: fill ? .fill : .fit)
                 } placeholder: {
                     Color.clear
                 }

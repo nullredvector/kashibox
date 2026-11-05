@@ -3,6 +3,25 @@ import SwiftUI
 struct VideoRef: Decodable, Equatable {
     let videoUrl: String
     let coverUrl: String
+    /// A landscape video: its panel gets two panes of room and the picture is not cropped.
+    let wide: Bool
+
+    init(videoUrl: String, coverUrl: String, wide: Bool = false) {
+        self.videoUrl = videoUrl
+        self.coverUrl = coverUrl
+        self.wide = wide
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        videoUrl = try c.decode(String.self, forKey: .videoUrl)
+        coverUrl = try c.decode(String.self, forKey: .coverUrl)
+        wide = try c.decodeIfPresent(Bool.self, forKey: .wide) ?? false
+    }
+
+    static func == (a: VideoRef, b: VideoRef) -> Bool { a.videoUrl == b.videoUrl }
+
+    private enum CodingKeys: String, CodingKey { case videoUrl, coverUrl, wide }
 }
 
 private struct AuthorFeed: Decodable {
@@ -26,10 +45,11 @@ final class PanelModel: ObservableObject, Identifiable {
     var onVideoChange: (() -> Void)?
 
     var current: VideoRef { videos[min(index, videos.count - 1)] }
+    var isWide: Bool { current.wide }
 
     init(_ item: TVItem) {
         id = item.id
-        videos = [VideoRef(videoUrl: item.videoUrl, coverUrl: item.coverUrl)]
+        videos = [VideoRef(videoUrl: item.videoUrl, coverUrl: item.coverUrl, wide: item.wide)]
     }
 
     func loadAuthorFeed() async {
