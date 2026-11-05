@@ -6,7 +6,7 @@ final class PlayerView: UIView {
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 }
 
-/// An endlessly looping video that fills its frame.
+/// An endlessly looping video that fills its frame (the sides or the top and bottom are cropped to fit).
 struct LoopingPlayer: UIViewRepresentable {
     let url: URL?
     let muted: Bool

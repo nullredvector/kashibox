@@ -2,19 +2,50 @@ import SwiftUI
 
 private let gap: CGFloat = 16
 private let margin: CGFloat = 40
-private let singleRowMax = 4
+private let singleRowUnits = 4
 
-/// Up to four panels sit in one row; from the fifth on there are two balanced rows (up to six each).
-/// Tiles are 9:16 and as big as fit.
-private func layoutFor(count: Int, in size: CGSize) -> (rows: Int, perRow: Int, tile: CGSize) {
-    let rows = count > singleRowMax ? 2 : 1
-    let perRow = rows == 1 ? max(count, 1) : (count + 1) / 2
+/// Panels keep their order. A portrait video takes one pane of room, a landscape one takes two. Up to four panes sit in
+/// one row; beyond that there are two rows, split as evenly as possible (the first row the longer when it ties). Panes are
+/// 9:16 and as big as fit; a two-pane panel is as tall as the others and spans two panes (and the gap between them).
+private func layoutSlots(_ weights: [Int], in size: CGSize) -> [CGRect] {
+    let n = weights.count
+    guard n > 0 else { return [] }
+    let total = weights.reduce(0, +)
+
+    var rows: [Range<Int>] = [0..<n]
+    if total > singleRowUnits && n > 1 {
+        var bestSplit = 1, bestMax = Int.max
+        for k in 1..<n {
+            let first = weights[..<k].reduce(0, +)
+            let widest = max(first, total - first)
+            if widest < bestMax || (widest == bestMax && first >= total - first) { bestMax = widest; bestSplit = k }
+        }
+        rows = [0..<bestSplit, bestSplit..<n]
+    }
+
+    let rowUnits = rows.map { range in range.reduce(0) { $0 + weights[$1] } }
+    let maxUnits = rowUnits.max() ?? 1
+    let rowCount = CGFloat(rows.count)
     let availW = size.width - 2 * margin
     let availH = size.height - 2 * margin
-    let w = (availW - gap * CGFloat(perRow - 1)) / CGFloat(perRow)
-    let h = (availH - gap * CGFloat(rows - 1)) / CGFloat(rows)
-    let tw = min(w, h * 9 / 16)
-    return (rows, perRow, CGSize(width: tw, height: tw * 16 / 9))
+    let byWidth = (availW - gap * CGFloat(maxUnits - 1)) / CGFloat(maxUnits)
+    let byHeight = ((availH - gap * (rowCount - 1)) / rowCount) * 9 / 16
+    let unit = min(byWidth, byHeight)
+    let height = unit * 16 / 9
+    let totalHeight = rowCount * height + (rowCount - 1) * gap
+
+    var rects = [CGRect](repeating: .zero, count: n)
+    for (r, range) in rows.enumerated() {
+        let rowWidth = CGFloat(rowUnits[r]) * unit + CGFloat(rowUnits[r] - 1) * gap
+        var x = (size.width - rowWidth) / 2
+        let y = (size.height - totalHeight) / 2 + CGFloat(r) * (height + gap)
+        for i in range {
+            let width = CGFloat(weights[i]) * unit + CGFloat(weights[i] - 1) * gap
+            rects[i] = CGRect(x: x, y: y, width: width, height: height)
+            x += width + gap
+        }
+    }
+    return rects
 }
 
 struct ContentView: View {
@@ -31,8 +62,7 @@ struct ContentView: View {
         GeometryReader { geo in
             let panels = store.panels
             let count = panels.count
-            let layout = layoutFor(count: count, in: geo.size)
-            let totalH = CGFloat(layout.rows) * layout.tile.height + CGFloat(layout.rows - 1) * gap
+            let rects = layoutSlots(panels.map { $0.isWide ? 2 : 1 }, in: geo.size)
 
             ZStack {
                 Color(white: 0.02)
@@ -44,21 +74,15 @@ struct ContentView: View {
                     }
                 }
                 ForEach(Array(panels.enumerated()), id: \.element.id) { index, panel in
-                    let row = index / layout.perRow
-                    let col = index % layout.perRow
-                    let inRow = row == 0 ? min(count, layout.perRow) : count - layout.perRow
-                    let rowW = CGFloat(inRow) * layout.tile.width + CGFloat(inRow - 1) * gap
+                    let rect = rects[index]
                     TileView(panel: panel,
                              selected: showSelection && panel.id == selectedID,
                              audible: panel.id == audibleID)
-                        .frame(width: layout.tile.width, height: layout.tile.height)
-                        .position(
-                            x: (geo.size.width - rowW) / 2 + CGFloat(col) * (layout.tile.width + gap) + layout.tile.width / 2,
-                            y: (geo.size.height - totalH) / 2 + CGFloat(row) * (layout.tile.height + gap) + layout.tile.height / 2
-                        )
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
                 }
             }
-            .animation(.easeInOut(duration: 0.35), value: panels.map(\.id))
+            .animation(.easeInOut(duration: 0.35), value: panels.map { "\($0.id)\($0.isWide)" })
         }
         .ignoresSafeArea()
         .background(

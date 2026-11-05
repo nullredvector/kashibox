@@ -73,7 +73,7 @@ function coverFor(videoUrl) { return videoUrl.replace('/videos/', '/covers/').re
 function authorFeed(archiveDir, videoPath, hidden) {
   const m = VIDEO_PATH.exec(videoPath || '');
   if (!m) return null;
-  const alone = { videos: [{ videoUrl: videoPath, coverUrl: coverFor(videoPath) }], index: 0 };
+  const alone = { videos: [{ videoUrl: videoPath, coverUrl: coverFor(videoPath), wide: isWide(archiveDir, videoPath) }], index: 0 };
   let idx;
   try { idx = build(archiveDir); } catch (_) { return alone; }
   const aid = idx.authorOf.get(m[2]);
@@ -89,7 +89,7 @@ function authorFeed(archiveDir, videoPath, hidden) {
   return {
     videos: slice.map(e => {
       const videoUrl = `/data/${e.dir}/videos/${e.id}.mp4`;
-      return { videoUrl, coverUrl: coverFor(videoUrl) };
+      return { videoUrl, coverUrl: coverFor(videoUrl), wide: isWide(archiveDir, videoUrl) };
     }),
     index: start - from,
   };
@@ -108,8 +108,43 @@ function shuffled(archiveDir, n) {
   }
   return all.slice(0, take).map(e => {
     const videoUrl = `/data/${e.dir}/videos/${e.id}.mp4`;
-    return { videoUrl, coverUrl: coverFor(videoUrl) };
+    return { videoUrl, coverUrl: coverFor(videoUrl), wide: isWide(archiveDir, videoUrl) };
   });
+}
+
+// Is this video landscape? The cover is the video's first frame, so its size says it; a JPEG states its size in the first
+// bytes, so only those are read. Unknown (no file, not a JPEG, a path outside the archive) counts as portrait.
+const wideCache = new Map();
+function jpegSize(buf) {
+  if (buf.length < 4 || buf[0] !== 0xFF || buf[1] !== 0xD8) return null;
+  let i = 2;
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xFF) { i++; continue; }
+    const marker = buf[i + 1];
+    if (marker === 0xFF) { i++; continue; }
+    if (marker === 0xD8 || (marker >= 0xD0 && marker <= 0xD7) || marker === 0x01) { i += 2; continue; }
+    if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+      return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+    }
+    i += 2 + buf.readUInt16BE(i + 2);
+  }
+  return null;
+}
+function isWide(archiveDir, videoPath) {
+  if (!VIDEO_PATH.test(videoPath || '')) return false;
+  if (wideCache.has(videoPath)) return wideCache.get(videoPath);
+  let wide = false;
+  try {
+    const fd = fs.openSync(path.join(archiveDir, coverFor(videoPath)), 'r');
+    try {
+      const buf = Buffer.alloc(65536);
+      const n = fs.readSync(fd, buf, 0, buf.length, 0);
+      const size = jpegSize(buf.subarray(0, n));
+      wide = !!size && size.width > size.height;
+    } finally { fs.closeSync(fd); }
+  } catch (_) { /* no cover: portrait */ }
+  wideCache.set(videoPath, wide);
+  return wide;
 }
 
 // A short label for a set of videos: the accounts they belong to, e.g. '@one, @two, @three +2' ('' if none are known)
@@ -132,4 +167,4 @@ function parseVideoPath(videoPath) {
   return m ? { id: m[2], coverSrc: coverFor(videoPath).replace(/^\//, '') } : null;
 }
 
-module.exports = { authorFeed, labelFor, parseVideoPath, shuffled };
+module.exports = { authorFeed, labelFor, parseVideoPath, shuffled, isWide, jpegSize };

@@ -1,9 +1,21 @@
 import Foundation
+import Combine
 
 struct TVItem: Decodable, Identifiable, Equatable {
     let id: String
     let videoUrl: String
     let coverUrl: String
+    let wide: Bool
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        videoUrl = try c.decode(String.self, forKey: .videoUrl)
+        coverUrl = try c.decode(String.self, forKey: .coverUrl)
+        wide = try c.decodeIfPresent(Bool.self, forKey: .wide) ?? false
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, videoUrl, coverUrl, wide }
 }
 
 private struct TVEvent: Decodable {
@@ -22,6 +34,7 @@ final class TVStore: ObservableObject {
     private var byID: [String: PanelModel] = [:]
     private var lastItems: [TVItem] = []
     private var gotFirstState = false
+    private var panelLinks: [String: AnyCancellable] = [:]
     private var feedCache: [VideoRef] = []
     private var feedLoadedAt = Date.distantPast
 
@@ -105,6 +118,8 @@ final class TVStore: ObservableObject {
             } else {
                 let panel = PanelModel(item)
                 panel.onVideoChange = { [weak self] in Task { await self?.refreshStars() } }
+                // a panel's video can change its shape (landscape or not), which moves the whole layout
+                panelLinks[item.id] = panel.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
                 byID[item.id] = panel
                 next.append(panel)
                 fresh.append(panel)
@@ -112,6 +127,7 @@ final class TVStore: ObservableObject {
         }
         let keep = Set(items.map(\.id))
         byID = byID.filter { keep.contains($0.key) }
+        panelLinks = panelLinks.filter { keep.contains($0.key) }
         panels = next
         if !next.isEmpty { startingSession = false }
         for panel in fresh { Task { await panel.loadAuthorFeed() } }

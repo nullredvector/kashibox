@@ -695,7 +695,7 @@ http.createServer((req, res) => {
       const saved = tvSessions.load(ARCHIVE_DIR).find(x => String(x.id) === String(m.id));
       if (!saved || !saved.items.length) { tvJson(404, { error: 'No such session' }); return; }
       tvGrid = saved.items.slice(-TV_MAX_TILES)
-        .map(i => ({ id: crypto.randomBytes(6).toString('hex'), videoUrl: i.videoUrl, coverUrl: i.coverUrl || '' }));
+        .map(i => ({ id: crypto.randomBytes(6).toString('hex'), videoUrl: i.videoUrl, coverUrl: i.coverUrl || '', wide: tvAuthor.isWide(ARCHIVE_DIR, i.videoUrl) }));
       tvSelectedId = null;
       tvSessionId = tvSessions.record(ARCHIVE_DIR, saved.id, tvGrid);
       tvBroadcast();
@@ -729,7 +729,7 @@ http.createServer((req, res) => {
   if (pathname === '/api/tv/feed' && req.method === 'GET') {
     const fromPhone = tvFeed.length >= 5;
     const videos = fromPhone
-      ? tvFeed.map(v => ({ videoUrl: v, coverUrl: v.replace('/videos/', '/covers/').replace(/\.mp4$/, '.jpg') }))
+      ? tvFeed.map(v => ({ videoUrl: v, coverUrl: v.replace('/videos/', '/covers/').replace(/\.mp4$/, '.jpg'), wide: tvAuthor.isWide(ARCHIVE_DIR, v) }))
       : tvAuthor.shuffled(ARCHIVE_DIR, 200);
     tvJson(200, { videos, source: fromPhone ? 'phone' : 'shuffle' });
     return;
@@ -764,7 +764,7 @@ http.createServer((req, res) => {
           const ok = u => typeof u === 'string' && u.length < 400 && u.startsWith('/') && !u.startsWith('//') && !u.includes('..');
           if (!ok(m.videoUrl) || (m.coverUrl && !ok(m.coverUrl))) throw new Error('bad url');
           tvGrid = tvGrid.filter(i => i.videoUrl !== m.videoUrl);
-          const fresh = { id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '' };
+          const fresh = { id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '', wide: tvAuthor.isWide(ARCHIVE_DIR, m.videoUrl) };
           const at = tvGrid.findIndex(i => i.id === tvSelectedId);
           if (at >= 0) { tvGrid[at] = fresh; tvSelectedId = fresh.id; }   // a highlighted panel gives way to the new video, in place
           else { tvGrid.push(fresh); while (tvGrid.length > TV_MAX_TILES) tvGrid.shift(); }
