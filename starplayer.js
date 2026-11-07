@@ -1166,12 +1166,76 @@
     const abs = new URL(rel, location.href).href;
     const name = (rel.match(/([^/]+\.mp4)$/) || [])[1] || 'video.mp4';
     e.dataTransfer.effectAllowed = 'copy';
+    if (selVideos.size > 1 && selVideos.has(rel)) {     // a browser drags only one file at a time: with several picked, carry their addresses
+      const all = [...selVideos].map(r => new URL(r, location.href).href).join('\n');
+      e.dataTransfer.setData('text/uri-list', all);
+      e.dataTransfer.setData('text/plain', all);
+      return;
+    }
     e.dataTransfer.setData('DownloadURL', 'video/mp4:' + name + ':' + abs);
     e.dataTransfer.setData('text/uri-list', abs);
     e.dataTransfer.setData('text/plain', abs);
     const img = cover.querySelector('img');
     if (img) e.dataTransfer.setDragImage(img, Math.round(img.clientWidth / 2), Math.round(img.clientHeight / 2));
   }, true);
+
+  // Picking several thumbnails (desktop): Cmd/Ctrl-click toggles one, Shift-click picks a range, and once something is picked a plain click
+  // toggles too. A bar offers Download (one file after another; a browser cannot drag many files out at once), Copy links and Clear.
+  const selVideos = new Set();           // video paths (data-video), kept across re-renders
+  let selAnchor = null, selBar = null, selTimer = null;
+  const videoName = rel => (rel.match(/([^/]+\.mp4)$/) || [])[1] || 'video.mp4';
+
+  function paintSelection() {
+    document.querySelectorAll('.preview-cover').forEach(c => c.classList.toggle('sel', selVideos.has(c.dataset.video)));
+    if (!selVideos.size) { if (selBar) { selBar.remove(); selBar = null; } return; }
+    if (!selBar) {
+      selBar = document.createElement('div'); selBar.id = 'sel-bar';
+      const label = document.createElement('span'); label.className = 'sel-count';
+      const btn = (text, fn, title) => { const b = document.createElement('button'); b.textContent = text; b.title = title; b.addEventListener('click', fn); selBar.appendChild(b); };
+      selBar.appendChild(label);
+      btn('Download', async () => {
+        const list = [...selVideos];
+        for (const rel of list) {
+          const a = document.createElement('a'); a.href = rel; a.download = videoName(rel); document.body.appendChild(a); a.click(); a.remove();
+          await new Promise(r => setTimeout(r, 400));
+        }
+        spToast('Downloading ' + list.length + ' video' + (list.length === 1 ? '' : 's'));
+      }, 'Save the picked videos to your Downloads folder');
+      btn('Copy links', () => {
+        const text = [...selVideos].map(r => new URL(r, location.href).href).join('\n');
+        (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => spToast('Links copied'), () => spToast('Could not copy'));
+      }, 'Copy the addresses of the picked videos');
+      btn('Clear', () => { selVideos.clear(); selAnchor = null; paintSelection(); }, 'Drop the selection (Esc)');
+      document.body.appendChild(selBar);
+    }
+    selBar.querySelector('.sel-count').textContent = selVideos.size + ' selected';
+  }
+
+  if (canHover) {
+    document.addEventListener('click', e => {
+      const cover = e.target && e.target.closest ? e.target.closest('.preview-cover') : null;
+      const rel = cover && cover.dataset.video;
+      if (!rel || !(e.metaKey || e.ctrlKey || e.shiftKey || selVideos.size)) return;
+      e.preventDefault(); e.stopPropagation();
+      if (e.shiftKey && selAnchor && selAnchor.isConnected) {
+        const grid = selAnchor.closest('.preview-grid') || selAnchor.parentElement;
+        const all = [...grid.querySelectorAll('.preview-cover')];
+        const a = all.indexOf(selAnchor), b = all.indexOf(cover);
+        if (a >= 0 && b >= 0) all.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(c => selVideos.add(c.dataset.video));
+        else selVideos.add(rel);
+      } else {
+        if (selVideos.has(rel)) selVideos.delete(rel); else selVideos.add(rel);
+        selAnchor = cover;
+      }
+      paintSelection();
+    }, true);
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && selVideos.size && !(e.target && e.target.closest && e.target.closest('input, textarea, select'))) { selVideos.clear(); selAnchor = null; paintSelection(); }
+    });
+    // grids are rebuilt as you browse: re-mark what is still picked
+    new MutationObserver(() => { if (selVideos.size) { clearTimeout(selTimer); selTimer = setTimeout(paintSelection, 150); } })
+      .observe(document.body, { childList: true, subtree: true });
+  }
 
   // Attach or release the preview <video> of one thumbnail
   function syncCoverPlayback(cover) {
@@ -8936,6 +9000,11 @@ render();
       .grid-size { width: 110px; height: 16px; margin: 0; accent-color: #aaa; cursor: pointer; }
       .preview-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
       .stars-grid-cover.is-playing::after { display: none; }
+      .preview-cover.sel { outline: 3px solid #4fc3f7; outline-offset: -3px; }
+      .preview-cover.sel::before { content: '✓'; position: absolute; top: 6px; left: 6px; z-index: 5; width: 22px; height: 22px; line-height: 22px; text-align: center; border-radius: 50%; background: #4fc3f7; color: #000; font-weight: 800; font-size: 14px; pointer-events: none; }
+      #sel-bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 3000; display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(28,28,28,.96); border: 1px solid #444; border-radius: 22px; box-shadow: 0 6px 24px rgba(0,0,0,.5); color: #ddd; font-size: 13px; }
+      #sel-bar button { background: #2c2c2c; border: 1px solid #444; color: #eee; border-radius: 14px; padding: 4px 12px; font-size: 13px; cursor: pointer; }
+      #sel-bar button:hover { background: #3a3a3a; }
       .player-slide.needs-tap::after {
         content: '▶'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
         width: 64px; height: 64px; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff;
