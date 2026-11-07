@@ -626,11 +626,22 @@ http.createServer((req, res) => {
     return;
   }
   if (pathname === '/api/tv/author' && req.method === 'GET') {
-    const feed = tvAuthor.authorFeed(ARCHIVE_DIR, String(url.parse(req.url, true).query.v || ''), dbStars.hiddenIds());
-    if (!feed) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid video' })); return; }
-    const body = JSON.stringify(feed);
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });
-    res.end(body);
+    (async () => {
+      const v = String(url.parse(req.url, true).query.v || '');
+      const hidden = dbStars.hiddenIds();
+      let feed = tvAuthor.authorFeed(ARCHIVE_DIR, v, hidden);
+      if (feed) {
+        // the video asked for first, then the ones around it (what a swipe reaches first); the rest are read in the background
+        const order = feed.videos.map((x, i) => ({ u: x.videoUrl, d: Math.abs(i - feed.index) })).sort((a, b) => a.d - b.d).map(x => x.u);
+        await tvAuthor.wideWithin(ARCHIVE_DIR, order.slice(0, 60), 4000);
+        tvAuthor.warmWide(ARCHIVE_DIR, order);
+        feed = tvAuthor.authorFeed(ARCHIVE_DIR, v, hidden);
+      }
+      if (!feed) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Invalid video' })); return; }
+      const body = JSON.stringify(feed);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(body) });
+      res.end(body);
+    })().catch(() => { if (!res.headersSent) { res.writeHead(500); res.end(); } });
     return;
   }
   const tvJson = (code, obj) => { const b = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(b) }); res.end(b); };
@@ -653,7 +664,11 @@ http.createServer((req, res) => {
     if (!tvGuard()) return;
     let chunks = [], size = 0;
     req.on('data', c => { size += c.length; if (size < limit) chunks.push(c); });
-    req.on('end', () => { try { if (size >= limit) throw new Error('too large'); done(JSON.parse(Buffer.concat(chunks).toString())); } catch (_) { tvJson(400, { error: 'Invalid request' }); } });
+    req.on('end', () => {
+      let m;
+      try { if (size >= limit) throw new Error('too large'); m = JSON.parse(Buffer.concat(chunks).toString()); } catch (_) { tvJson(400, { error: 'Invalid request' }); return; }
+      Promise.resolve().then(() => done(m)).catch(() => { if (!res.headersSent) tvJson(400, { error: 'Invalid request' }); });
+    });
   };
 
   // Which of these videos are starred? (?v=/data/Likes/videos/1.mp4&v=...)
@@ -691,11 +706,13 @@ http.createServer((req, res) => {
   }
   // Bring a saved TV session back onto the grid; further videos sent from a phone are added to it
   if (pathname === '/api/tv/session' && req.method === 'POST') {
-    tvBody(2000, m => {
+    tvBody(2000, async m => {
       const saved = tvSessions.load(ARCHIVE_DIR).find(x => String(x.id) === String(m.id));
       if (!saved || !saved.items.length) { tvJson(404, { error: 'No such session' }); return; }
-      tvGrid = saved.items.slice(-TV_MAX_TILES)
-        .map(i => ({ id: crypto.randomBytes(6).toString('hex'), videoUrl: i.videoUrl, coverUrl: i.coverUrl || '', wide: tvAuthor.isWide(ARCHIVE_DIR, i.videoUrl) }));
+      const kept = saved.items.slice(-TV_MAX_TILES);
+      await tvAuthor.wideWithin(ARCHIVE_DIR, kept.map(i => i.videoUrl), 2500);
+      tvGrid = kept
+        .map(i => ({ id: crypto.randomBytes(6).toString('hex'), videoUrl: i.videoUrl, coverUrl: i.coverUrl || '', wide: tvAuthor.wideCached(i.videoUrl) }));
       tvSelectedId = null;
       tvSessionId = tvSessions.record(ARCHIVE_DIR, saved.id, tvGrid);
       tvBroadcast();
@@ -727,17 +744,25 @@ http.createServer((req, res) => {
   }
   // The Home feed order for the TV: published by a phone (its ranked list), else a random mix of the archive
   if (pathname === '/api/tv/feed' && req.method === 'GET') {
-    const fromPhone = tvFeed.length >= 5;
-    const videos = fromPhone
-      ? tvFeed.map(v => ({ videoUrl: v, coverUrl: v.replace('/videos/', '/covers/').replace(/\.mp4$/, '.jpg'), wide: tvAuthor.isWide(ARCHIVE_DIR, v) }))
-      : tvAuthor.shuffled(ARCHIVE_DIR, 200);
-    tvJson(200, { videos, source: fromPhone ? 'phone' : 'shuffle' });
+    (async () => {
+      const fromPhone = tvFeed.length >= 5;
+      const paths = fromPhone ? tvFeed : tvAuthor.shuffled(ARCHIVE_DIR, 200).map(v => v.videoUrl);
+      // the first ones are what the TV shows next: wait a moment for those; the rest are read in the background and
+      // are there on the next request (the TV asks again after a minute)
+      await tvAuthor.wideWithin(ARCHIVE_DIR, paths.slice(0, 6), 1500);
+      tvAuthor.warmWide(ARCHIVE_DIR, paths);
+      const videos = fromPhone
+        ? tvFeed.map(v => ({ videoUrl: v, coverUrl: v.replace('/videos/', '/covers/').replace(/\.mp4$/, '.jpg'), wide: tvAuthor.wideCached(v) }))
+        : tvAuthor.shuffled(ARCHIVE_DIR, 200);
+      tvJson(200, { videos, source: fromPhone ? 'phone' : 'shuffle' });
+    })().catch(() => { if (!res.headersSent) tvJson(500, { error: 'failed' }); });
     return;
   }
   if (pathname === '/api/tv/feed' && req.method === 'POST') {
     tvBody(100000, m => {
       if (!Array.isArray(m.videos)) { tvJson(400, { error: 'Invalid request' }); return; }
       tvFeed = m.videos.filter(v => typeof v === 'string' && tvAuthor.parseVideoPath(v)).slice(0, 300);
+      tvAuthor.warmWide(ARCHIVE_DIR, tvFeed);
       tvJson(200, { ok: true, count: tvFeed.length });
     });
     return;
@@ -752,7 +777,7 @@ http.createServer((req, res) => {
     if (!tvGuard()) return;
     let chunks = [], size = 0;
     req.on('data', c => { size += c.length; if (size < 4000) chunks.push(c); });
-    req.on('end', () => {
+    req.on('end', async () => {
       try {
         if (size >= 4000) throw new Error('too large');
         const m = JSON.parse(Buffer.concat(chunks).toString());
@@ -763,8 +788,9 @@ http.createServer((req, res) => {
         } else if (m.action === 'add') {
           const ok = u => typeof u === 'string' && u.length < 400 && u.startsWith('/') && !u.startsWith('//') && !u.includes('..');
           if (!ok(m.videoUrl) || (m.coverUrl && !ok(m.coverUrl))) throw new Error('bad url');
+          await tvAuthor.wideWithin(ARCHIVE_DIR, [m.videoUrl], 1500);   // a moment to learn its shape, never longer
           tvGrid = tvGrid.filter(i => i.videoUrl !== m.videoUrl);
-          const fresh = { id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '', wide: tvAuthor.isWide(ARCHIVE_DIR, m.videoUrl) };
+          const fresh = { id: crypto.randomBytes(6).toString('hex'), videoUrl: m.videoUrl, coverUrl: m.coverUrl || '', wide: tvAuthor.wideCached(m.videoUrl) };
           const at = tvGrid.findIndex(i => i.id === tvSelectedId);
           if (at >= 0) { tvGrid[at] = fresh; tvSelectedId = fresh.id; }   // a highlighted panel gives way to the new video, in place
           else { tvGrid.push(fresh); while (tvGrid.length > TV_MAX_TILES) tvGrid.shift(); }
