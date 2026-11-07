@@ -1152,9 +1152,26 @@
     cover.classList.add('preview-cover');
     cover.dataset.video = videoPath;
     if (!canHover) return;
+    cover.draggable = true;                     // drag a thumbnail out of the page: see the dragstart handler below
     cover.addEventListener('mouseenter', () => { cover._spHover = true;  syncCoverPlayback(cover); });
     cover.addEventListener('mouseleave', () => { cover._spHover = false; syncCoverPlayback(cover); });
   }
+
+  // Dragging a thumbnail out of the page. Chrome and Edge drop the video file itself (DownloadURL) into a folder, the desktop or a
+  // window that accepts files; every browser also carries the address (a link for a tab, a chat box or another kashibox window).
+  document.addEventListener('dragstart', e => {
+    const cover = e.target && e.target.closest ? e.target.closest('.preview-cover') : null;
+    const rel = cover && cover.dataset.video;
+    if (!rel || !e.dataTransfer) return;
+    const abs = new URL(rel, location.href).href;
+    const name = (rel.match(/([^/]+\.mp4)$/) || [])[1] || 'video.mp4';
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('DownloadURL', 'video/mp4:' + name + ':' + abs);
+    e.dataTransfer.setData('text/uri-list', abs);
+    e.dataTransfer.setData('text/plain', abs);
+    const img = cover.querySelector('img');
+    if (img) e.dataTransfer.setDragImage(img, Math.round(img.clientWidth / 2), Math.round(img.clientHeight / 2));
+  }, true);
 
   // Attach or release the preview <video> of one thumbnail
   function syncCoverPlayback(cover) {
