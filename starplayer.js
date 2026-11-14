@@ -2458,6 +2458,49 @@
     hidRow.appendChild(reviewBtn);
     hid.append(hidStatus, hidRow);
 
+    // ── Telegram downloader pins ──
+    const tg = section('Telegram downloader', 'Videos you pin in the Telegram downloader show up in the Library tab by themselves (every 10 minutes, or press Sync now). Unpin one there and it leaves the Library. The downloader’s files and database are only read, never changed. Give the path to its db.sqlite as this server sees it; its downloads folder must sit next to it.');
+    const tgRow = document.createElement('div');
+    tgRow.className = 'set-try';
+    const tgIn = document.createElement('input');
+    tgIn.className = 'set-input'; tgIn.type = 'text'; tgIn.placeholder = '/library2/telegram/db.sqlite'; tgIn.autocomplete = 'off'; tgIn.spellcheck = false;
+    tgIn.value = settings.tgDb || '';
+    const tgBtn = document.createElement('button');
+    tgBtn.className = 'set-btn'; tgBtn.textContent = 'Sync now';
+    const tgStatus = document.createElement('div'); tgStatus.className = 'set-status';
+    const TG_ERR = { NOT_SET: 'Not set up.', NO_DATABASE: 'That is not a database file this server can read.', NO_SQLITE3: 'This server has no sqlite tool (update the image).',
+      QUERY_FAILED: 'The database could not be read (is the downloader mid-write? try again).', BAD_OUTPUT: 'The database answered something unexpected.',
+      FILES_NOT_FOUND: 'Pins found, but their files were not found next to the database. The Library was left as it was.' };
+    const tgShow = st => {
+      const l = st && st.last;
+      if (!st || !st.configured) { tgStatus.textContent = 'Off. Enter the path to turn it on.'; return; }
+      if (!l) { tgStatus.textContent = 'Waiting for the first sync…'; return; }
+      const when = scoutAgo(l.at);
+      tgStatus.textContent = l.ok
+        ? l.rows + ' pinned video' + (l.rows === 1 ? '' : 's') + ' (' + l.found + ' file' + (l.found === 1 ? '' : 's') + ' found); ' + l.added + ' added, ' + l.removed + ' removed. Synced ' + when + '.'
+        : (TG_ERR[l.error] || 'Sync failed (' + l.error + ').') + ' (' + when + ')';
+    };
+    const tgSync = () => {
+      tgBtn.disabled = true; tgStatus.textContent = 'Syncing…';
+      return fetch('/api/library/tg-sync', { method: 'POST' }).then(r => (r.ok ? r.json() : null)).then(st => {
+        tgShow(st);
+        if (st && st.last && st.last.ok && (st.last.added || st.last.removed)) loadLibrary(true).catch(() => {});
+      }).catch(() => { tgStatus.textContent = 'Could not reach the server.'; }).finally(() => { tgBtn.disabled = false; });
+    };
+    let tgTimer = null;
+    tgIn.addEventListener('input', () => {
+      clearTimeout(tgTimer);
+      tgTimer = setTimeout(() => {
+        const v = tgIn.value.trim();
+        if (v && !(v.startsWith('/') && /\.(sqlite3?|db)$/i.test(v))) { tgStatus.textContent = 'Use the full path to the .sqlite file, starting with /.'; return; }
+        saveSettings({ tgDb: v }).then(m => { if (m) { tgStatus.textContent = m; return; } if (v) tgSync(); else tgShow({ configured: false }); });
+      }, 600);
+    });
+    tgBtn.addEventListener('click', tgSync);
+    tgRow.append(tgIn, tgBtn);
+    tg.append(tgRow, tgStatus);
+    fetch('/api/library/tg-sync', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(st => { if (tgStatus.isConnected && tgStatus.textContent === '') tgShow(st); }).catch(() => {});
+
     // ── this device ──
     const dev = section('This device');
     const dbgRow = document.createElement('label');

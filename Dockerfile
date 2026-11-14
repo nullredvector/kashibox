@@ -2,8 +2,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# ffmpeg makes the thumbnails of the Library's videos
-RUN apk add --no-cache ffmpeg
+# ffmpeg makes the thumbnails of the Library's videos; sqlite reads the Telegram downloader's pins (read-only)
+RUN apk add --no-cache ffmpeg sqlite
 
 # starplayer.js is baked into the image at build time
 COPY starplayer.js ./starplayer.js
@@ -12,6 +12,7 @@ COPY db_stars.js   ./db_stars.js
 COPY tv_author.js  ./tv_author.js
 COPY tv_sessions.js ./tv_sessions.js
 COPY library.js    ./library.js
+COPY tg_pins.js    ./tg_pins.js
 COPY genvideo.js   ./genvideo.js
 COPY gen_jobs.js   ./gen_jobs.js
 COPY scout_store.js ./scout_store.js
