@@ -19,7 +19,7 @@ const APPDATA     = path.join(ARCHIVE_DIR, 'data', '.appdata');
 const FILE        = path.join(APPDATA, 'library.json');
 const COVER_DIR   = path.join(APPDATA, 'library-covers');
 
-const VIDEO_EXT   = /\.(mp4|m4v|mov|webm)$/i;
+const VIDEO_EXT   = /\.(mp4|m4v|f4v|mov|webm)$/i;
 const MAX_FILES   = 100000;
 const MAX_DEPTH   = 8;
 
@@ -36,8 +36,9 @@ function safe(p) {
 function load() {
   try {
     const d = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    return { dirs: Array.isArray(d.dirs) ? d.dirs.filter(x => typeof x === 'string') : [], items: d.items && typeof d.items === 'object' ? d.items : {} };
-  } catch (_) { return { dirs: [], items: {} }; }
+    return { dirs: Array.isArray(d.dirs) ? d.dirs.filter(x => typeof x === 'string') : [], items: d.items && typeof d.items === 'object' ? d.items : {},
+      skipped: d.skipped && typeof d.skipped === 'object' ? d.skipped : {} };
+  } catch (_) { return { dirs: [], items: {}, skipped: {} }; }
 }
 
 function save(d) {
@@ -189,6 +190,30 @@ function addFiles(files) {
   return added;
 }
 
+// Items kept in step with another program's list (the Telegram downloader's pins): added when they appear on the list,
+// forgotten when they leave it. A file you removed by hand does not come back. Files are never touched.
+// paths: absolute paths of the files on the list. -> { added, removed, total }
+function syncManaged(src, paths) {
+  const cur = load();
+  const want = new Map();
+  for (const p of paths) {
+    const r = safe(p);
+    if (r && VIDEO_EXT.test(r)) want.set(idFor(r), r);
+  }
+  let added = 0, removed = 0, i = 0;
+  const now = Date.now();
+  for (const [id, r] of want) {
+    if (cur.items[id] || cur.skipped[id]) continue;
+    cur.items[id] = { path: r, added: now - i++, src };    // list order: first on the list = newest
+    added++;
+  }
+  for (const [id, x] of Object.entries(cur.items)) if (x.src === src && !want.has(id)) { delete cur.items[id]; removed++; }
+  let cleared = 0;
+  for (const id of Object.keys(cur.skipped)) if (!want.has(id)) { delete cur.skipped[id]; cleared++; }     // off the list: a later re-pin counts as new
+  if (added || removed || cleared) save(cur);
+  return { added, removed, total: want.size };
+}
+
 // A video this app made itself (in the appdata "generated" folder) goes straight into the library
 function addGenerated(file) {
   const r = safe(file);
@@ -202,7 +227,8 @@ function addGenerated(file) {
 function removeItems(ids) {
   const cur = load();
   let n = 0;
-  ids.forEach(id => { if (cur.items[id]) { delete cur.items[id]; n++; } });
+  // an item another program keeps in step (src) stays removed once you remove it, even while it is still on their list
+  ids.forEach(id => { if (cur.items[id]) { if (cur.items[id].src) cur.skipped[id] = 1; delete cur.items[id]; n++; } });
   if (n) save(cur);
   return n;
 }
@@ -265,4 +291,4 @@ function coverFor(id) {
   return p;
 }
 
-module.exports = { addGenerated, ROOT, browse, listFiles, addDir, removeDir, addFiles, removeItems, list, fileFor, coverFor, sourceDirs };
+module.exports = { syncManaged, addGenerated, ROOT, browse, listFiles, addDir, removeDir, addFiles, removeItems, list, fileFor, coverFor, sourceDirs };

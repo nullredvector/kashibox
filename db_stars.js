@@ -89,6 +89,7 @@ function save(data) {
 // ── Settings (settings.json): small, whitelisted, shared by every device ──
 //   profileUrl  address opened when a username tab is double-clicked; {username} stands for the username ('' = off)
 //   debugBanner true = show the status banner at startup (Capacitor / Cast diagnostics)
+//   tgDb        absolute path to the Telegram downloader's db.sqlite ('' = off): its pinned videos are kept in the Library
 //   scoutEnabled / scoutDaily / scoutMin / scoutFrom / scoutTo  the For You scout's limits (it reads them from settings.json)
 function cleanSettings(input) {
   const s = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
@@ -104,6 +105,13 @@ function cleanSettings(input) {
     out.numericMin = s.numericMin; out.numericMax = s.numericMax;
   }
   if (typeof s.numericName === 'string') out.numericName = s.numericName.trim().slice(0, 30);
+  // The Telegram downloader's database (its pinned videos are kept in the Library): '' = off
+  if (typeof s.tgDb === 'string') {
+    const d = s.tgDb.trim();
+    if (d.length > 500 || d.includes('\0')) throw new Error('tgDb too long');
+    if (d && !(d.startsWith('/') && /\.(sqlite3?|db)$/i.test(d))) throw new Error('tgDb needs an absolute path to a .sqlite or .db file');
+    out.tgDb = d;
+  }
   // The For You scout (another program) reads these from settings.json: off unless scoutEnabled is true
   if (typeof s.scoutEnabled === 'boolean') out.scoutEnabled = s.scoutEnabled;
   if (Number.isInteger(s.scoutDaily) && s.scoutDaily >= 0 && s.scoutDaily <= 1000) out.scoutDaily = s.scoutDaily;     // videos it may look at per day

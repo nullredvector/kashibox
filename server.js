@@ -9,6 +9,7 @@ const dbStars  = require('./db_stars');
 const tvAuthor = require('./tv_author');
 const tvSessions = require('./tv_sessions');
 const library  = require('./library');
+const tgPins   = require('./tg_pins');
 const genJobs  = require('./gen_jobs');
 const scoutStore = require('./scout_store');
 
@@ -176,7 +177,7 @@ let tvSelectedId = null;  // the panel highlighted on the TV (the TV reports it 
 // A file with range-request support (required for video), caching headers and a 304 when unchanged
 function serveFile(req, res, filePath, opts) {
   opts = opts || {};
-  const mime = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+  const mime = opts.mime || MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
   fs.stat(filePath, (err, stat) => {
     if (err) {
       res.writeHead(err.code === 'ENOENT' ? 404 : 500);
@@ -797,13 +798,24 @@ http.createServer((req, res) => {
       if (m[1] === 'videos') {
         const file = library.fileFor(m[2]);
         if (!file) { res.writeHead(404); res.end('Not found'); return; }
-        serveFile(req, res, file, { cacheable: true });
+        serveFile(req, res, file, { cacheable: true, mime: /\.(f4v|m4v)$/i.test(file) ? 'video/mp4' : undefined });
       } else {
         library.coverFor(m[2]).then(file => {
           if (!file) { res.writeHead(404); res.end('Not found'); return; }
           serveFile(req, res, file, { cacheable: true });
         });
       }
+      return;
+    }
+    // The Telegram downloader's pins, kept in the Library (tg_pins.js). GET = what the last sync did; POST = sync now.
+    if (pathname === '/api/library/tg-sync') {
+      if (req.method === 'GET') return sendJson(200, tgPins.status());
+      if (req.method !== 'POST') { res.writeHead(405); res.end('Method not allowed'); return; }
+      const origin = req.headers['origin'];
+      let sameOrigin = true;
+      if (origin) { try { sameOrigin = new URL(origin).host === req.headers['host']; } catch (_) { sameOrigin = false; } }
+      if (!sameOrigin) return sendJson(403, { error: 'cross-origin request refused' });
+      tgPins.syncNow().then(() => sendJson(200, tgPins.status())).catch(() => sendJson(500, { error: 'UNKNOWN' }));
       return;
     }
     if (pathname === '/api/library' && req.method === 'GET') {
@@ -915,4 +927,4 @@ http.createServer((req, res) => {
   }
 
   serveFile(req, res, filePath);
-}).listen(PORT, () => console.log(`[starplayer] listening on http://localhost:${PORT}`));
+}).listen(PORT, () => { console.log(`[starplayer] listening on http://localhost:${PORT}`); tgPins.start(); });
