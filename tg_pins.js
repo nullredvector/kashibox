@@ -12,13 +12,40 @@ const dbStars = require('./db_stars');
 
 const SRC = 'tg';
 const QUERY = "SELECT file_path FROM downloads WHERE pinned = 1 AND file_type = 'video' AND status = 'completed' ORDER BY id DESC";
-const EVERY_MS = 10 * 60 * 1000;
+const TICK_MS = 15 * 1000;            // how often to look at the clock; the check itself runs every tgSyncMin minutes
+const TAG_NAME = 'tg';                // the group every imported video is put in
+const STARS_FILE = path.join(process.env.ARCHIVE_DIR || '/archive', 'data', '.appdata', 'stars.json');
 
 let last = null;          // { at, ok, rows, found, added, removed, error }
 let running = null;
 
 const real = p => { try { return fs.realpathSync(p); } catch (_) { return null; } };
 const within = (p, base) => p === base || p.startsWith(base + path.sep);
+
+// minutes between checks (Settings; default 1)
+function intervalMs() {
+  const m = dbStars.loadSettings().tgSyncMin;
+  return (Number.isInteger(m) && m >= 1 && m <= 1440 ? m : 1) * 60 * 1000;
+}
+
+// Put the imported videos in the group named "tg" (made if it is not there). The first time it holds every imported video;
+// after that only newly imported ones are added, so taking a video out of the group by hand sticks. Videos that leave the
+// Library leave the group. Uses the same compare-and-swap save as the browser, so it can never overwrite a newer change.
+function tagImported(r) {
+  let rev = dbStars.currentRev();
+  if (rev !== 'none') { try { JSON.parse(fs.readFileSync(STARS_FILE, 'utf8')); } catch (_) { return; } }     // unreadable: never write over it
+  const d = dbStars.load();
+  let g = d.groups.find(x => x && typeof x.name === 'string' && x.name.trim().toLowerCase() === TAG_NAME);
+  let changed = false;
+  if (!g) { g = { id: Date.now().toString(36) + Math.random().toString(36).slice(2), name: TAG_NAME, videoIds: [] }; d.groups.push(g); changed = true; r = { ...r, addedIds: r.allIds }; }
+  const have = new Set(g.videoIds);
+  r.addedIds.forEach(id => { if (!have.has(id)) { g.videoIds.push(id); have.add(id); changed = true; } });
+  const gone = new Set(r.removedIds);
+  if (gone.size && g.videoIds.some(id => gone.has(id))) { g.videoIds = g.videoIds.filter(id => !gone.has(id)); changed = true; }
+  if (!changed) return;
+  const res = dbStars.saveGuarded(d, rev);
+  if (res.code !== 200) throw Object.assign(new Error('stale'), { code: 'TAG_RETRY' });
+}
 
 // the database file the user named in Settings, or null
 function dbPath() {
@@ -61,7 +88,9 @@ async function run() {
     // pins exist but none of their files can be found: the folder is not mounted or the layout differs. Keep what we have.
     if (rows.length && !files.length) { last = { at, ok: false, rows: rows.length, found: 0, error: 'FILES_NOT_FOUND' }; return last; }
     const r = library.syncManaged(SRC, files);
-    last = { at, ok: true, rows: rows.length, found: files.length, added: r.added, removed: r.removed };
+    let tagError;
+    try { tagImported(r); } catch (e) { tagError = (e && e.code) || 'TAG_FAILED'; }       // the Library is already right; a busy stars.json is retried next time
+    last = { at, ok: true, rows: rows.length, found: files.length, added: r.added, removed: r.removed, ...(tagError ? { tagError } : {}) };
   } catch (e) {
     last = { at, ok: false, error: (e && e.code) || 'UNKNOWN' };
   }
@@ -78,7 +107,7 @@ function status() { return { configured: !!dbPath(), last }; }
 
 function start() {
   setTimeout(() => { syncNow().catch(() => {}); }, 15000);
-  setInterval(() => { if (dbPath()) syncNow().catch(() => {}); }, EVERY_MS).unref();
+  setInterval(() => { if (dbPath() && (!last || Date.now() - last.at >= intervalMs())) syncNow().catch(() => {}); }, TICK_MS).unref();
 }
 
-module.exports = { syncNow, status, start, resolveFiles, QUERY };
+module.exports = { syncNow, status, start, resolveFiles, intervalMs, QUERY };

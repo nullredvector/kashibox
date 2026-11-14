@@ -119,6 +119,7 @@
     baseSnap = JSON.stringify({ stars: serverData.stars || {}, groups: serverData.groups || [], levels: serverData.levels || {} });
     if (starsTabActive) renderStarsView();
     if (typeof autotagTabActive !== 'undefined' && autotagTabActive) renderAutotagView();
+    if (typeof listTabKind !== 'undefined' && listTabKind === 'library') renderListView();
   }
 
   async function reconcile() {
@@ -1627,11 +1628,95 @@
       add.textContent = '+ Add videos';
       add.addEventListener('click', () => showLibraryAdd(() => loadLibrary(true).then(() => { if (listTabKind === 'library') renderListView(); })));
       header.appendChild(add);
+      if (settings.tgDb) {
+        const sync = document.createElement('button');
+        sync.className = 'set-btn lib-add-btn';
+        sync.textContent = 'Sync Telegram';
+        sync.title = 'Look for newly pinned videos in the Telegram downloader now';
+        sync.addEventListener('click', () => {
+          sync.disabled = true; sync.textContent = 'Syncing…';
+          fetch('/api/library/tg-sync', { method: 'POST' }).then(r => (r.ok ? r.json() : null)).then(st => {
+            const l = st && st.last;
+            if (!l) spToast('Could not reach the server.');
+            else if (!l.ok) spToast(TG_ERR[l.error] || 'Sync failed (' + l.error + ').');
+            else spToast('Synced: ' + l.added + ' added, ' + l.removed + ' removed.');
+            return Promise.all([loadLibrary(true), refreshFromServer()]);
+          }).catch(() => spToast('Could not reach the server.')).finally(() => { if (listTabKind === 'library') renderListView(); });
+        });
+        header.appendChild(sync);
+      }
+      if (isMobilePlayer()) {
+        const tagsBtn = document.createElement('button');
+        tagsBtn.className = 'set-btn lib-add-btn';
+        tagsBtn.textContent = libTagsOpen ? 'Hide tags' : 'Tags' + (libGroupIds.size + libLvl.size + (libUntagged ? 1 : 0) ? ' (' + (libGroupIds.size + libLvl.size + (libUntagged ? 1 : 0)) + ')' : '');
+        tagsBtn.addEventListener('click', () => { libTagsOpen = !libTagsOpen; renderListView(); });
+        header.appendChild(tagsBtn);
+      }
     } else header.appendChild(scope);
     header.appendChild(search);
     if (!following) header.appendChild(buildGridControls(meta.sort, grid, listViewEl));
-    listViewEl.appendChild(header);
-    listViewEl.appendChild(grid);
+    let libSidebar = null;
+    if (isLib) {
+      libSidebar = document.createElement('div');
+      libSidebar.id = 'lib-sidebar';
+      if (libTagsOpen) libSidebar.classList.add('open');
+      const layout = document.createElement('div'); layout.id = 'lib-layout';
+      const main = document.createElement('div'); main.id = 'lib-main';
+      main.append(header, grid);
+      // phones: the tag panel slides over the page; a tap anywhere else puts it away
+      main.addEventListener('click', e => { if (libTagsOpen && isMobilePlayer()) { e.stopPropagation(); e.preventDefault(); libTagsOpen = false; renderListView(); } }, true);
+      layout.append(libSidebar, main);
+      listViewEl.appendChild(layout);
+    } else {
+      listViewEl.appendChild(header);
+      listViewEl.appendChild(grid);
+    }
+
+    // The Library's tag column: picking tags filters (a video must have every picked group; a picked number is any of them)
+    function paintLibSidebar(base, shown) {
+      libSidebar.innerHTML = '';
+      const nSel = libGroupIds.size + libLvl.size + (libUntagged ? 1 : 0);
+      const gSets = new Map(groups.map(g => [g.id, new Set(g.videoIds)]));
+      const inG = (g, id) => gSets.get(g.id).has(id);
+      const item = (label, count, active, onClick, extra) => {
+        const it = document.createElement('div');
+        it.className = 'stars-group-item' + (active ? ' active' : '') + (!active && count === 0 ? ' dim' : '') + (extra ? ' ' + extra : '');
+        const nm = document.createElement('span'); nm.className = 'stars-group-name'; nm.textContent = label;
+        const ct = document.createElement('span'); ct.className = 'stars-group-count'; ct.textContent = String(count);
+        it.append(nm, ct);
+        it.addEventListener('click', onClick);
+        libSidebar.appendChild(it);
+        return it;
+      };
+      const rerun = () => { renderListView(); };
+      item('All', base.length, nSel === 0, () => { libGroupIds.clear(); libLvl.clear(); libUntagged = false; rerun(); });
+      const lvlNums = numFilterList().filter(n => base.some(v => levels[v.id] === n));
+      if (lvlNums.length) {
+        const lg = document.createElement('div'); lg.id = 'lib-lvl-grid';
+        for (const n of lvlNums) {
+          const b = document.createElement('button');
+          const active = libLvl.has(n);
+          b.className = 'stars-lvl-btn' + (active ? ' active' : '');
+          b.textContent = n;
+          const c = (active ? base : shown).filter(v => levels[v.id] === n).length;
+          b.title = c + ' video' + (c !== 1 ? 's' : '');
+          b.addEventListener('click', () => { if (active) libLvl.delete(n); else libLvl.add(n); rerun(); });
+          lg.appendChild(b);
+        }
+        libSidebar.appendChild(lg);
+      }
+      const hr = document.createElement('hr'); hr.className = 'stars-sidebar-divider'; libSidebar.appendChild(hr);
+      const untagged = base.filter(v => !groups.some(g => inG(g, v.id)));
+      item('Untagged', untagged.length, libUntagged, () => { libUntagged = !libUntagged; if (libUntagged) libGroupIds.clear(); rerun(); });
+      const list = groups.filter(g => libGroupIds.has(g.id) || base.some(v => inG(g, v.id)))
+        .sort((a, b) => (groupSortOrder === 'count' ? b.videoIds.length - a.videoIds.length : a.name.localeCompare(b.name)));
+      list.forEach(g => {
+        const active = libGroupIds.has(g.id);
+        const count = active ? shown.length : shown.filter(v => inG(g, v.id)).length;
+        item(g.name, count, active, () => { if (active) libGroupIds.delete(g.id); else { libGroupIds.add(g.id); libUntagged = false; } rerun(); });
+      });
+      if (!list.length) { const n = document.createElement('div'); n.className = 'lib-side-note'; n.textContent = 'Tag a video with the \u2295 button on its thumbnail and the tag shows up here.'; libSidebar.appendChild(n); }
+    }
 
     function body() {
       releaseGridPreviews(listViewEl);
@@ -1641,9 +1726,16 @@
         if (!libItems) { grid.textContent = 'Loading…'; return; }
         let items = libItems.filter(v => !isHidden(v.id));
         if (q) items = items.filter(v => v.desc.toLowerCase().includes(q));
+        const base = items;
+        const picked = [...libGroupIds].map(gid => groups.find(g => g.id === gid)).filter(Boolean);
+        if (picked.length) { const sets = picked.map(g => new Set(g.videoIds)); items = items.filter(v => sets.every(st => st.has(v.id))); }
+        if (libUntagged) { const any = new Set(groups.flatMap(g => g.videoIds)); items = items.filter(v => !any.has(v.id)); }
+        if (libLvl.size) items = items.filter(v => libLvl.has(levels[v.id]));
         count.textContent = `${items.length} video${items.length !== 1 ? 's' : ''}`;
+        paintLibSidebar(base, items);
         if (!items.length) {
-          grid.appendChild(Object.assign(document.createElement('div'), { className: 'author-empty', textContent: q ? 'No matches.' : libItems.length ? 'Everything here is hidden.' : 'The library is empty. Choose folders in Settings, then use + Add videos.' }));
+          const filtered = picked.length || libUntagged || libLvl.size;
+          grid.appendChild(Object.assign(document.createElement('div'), { className: 'author-empty', textContent: q ? 'No matches.' : filtered ? 'No video has all of these tags. Pick fewer tags to widen the filter.' : libItems.length ? 'Everything here is hidden.' : 'The library is empty. Choose folders in Settings, then use + Add videos.' }));
         }
         fillGrid(grid, items, (v, idx) => buildListCard(v, idx, items));
         observeGridPreviews(grid);
@@ -1673,7 +1765,17 @@
       fillGrid(grid, items, (v, idx) => buildListCard(v, idx, items));
       observeGridPreviews(grid);
     }
-    if (isLib) { loadLibrary().then(() => { if (listTabKind === 'library' && listViewEl) body(); }); }
+    if (isLib) {
+      loadLibrary(Date.now() - libLoadedAt > 20000).then(() => { if (listTabKind === 'library' && listViewEl) body(); });
+      // while the page is open, pick up what a sync adds (new videos, the tg tag) without a reload
+      clearInterval(libTimer);
+      libTimer = setInterval(() => {
+        if (listTabKind !== 'library' || document.hidden) { if (listTabKind !== 'library') { clearInterval(libTimer); libTimer = null; } return; }
+        const before = (libItems || []).map(v => v.id).join(',');
+        loadLibrary(true).then(() => { if (listTabKind === 'library' && (libItems || []).map(v => v.id).join(',') !== before) renderListView(); });
+        refreshFromServer();
+      }, 30000);
+    }
     body();
   }
 
@@ -1760,11 +1862,20 @@
 
   let libItems = null;   // [{ id, desc, createTime, coverSrc, videoPath, library: true }] | null until loaded
   let libInfo  = null;   // { root, dirs } from the server
+  // What the Telegram pin sync says when it could not finish (codes from tg_pins.js)
+  const TG_ERR = { NOT_SET: 'Not set up.', NO_DATABASE: 'That is not a database file this server can read.', NO_SQLITE3: 'This server has no sqlite tool (update the image).',
+    QUERY_FAILED: 'The database could not be read (is the downloader mid-write? try again).', BAD_OUTPUT: 'The database answered something unexpected.',
+    FILES_NOT_FOUND: 'Pins found, but their files were not found next to the database. The Library was left as it was.', TAG_RETRY: 'Synced, but the \u201ctg\u201d tag will be added on the next check.' };
+  let libLoadedAt = 0, libTimer = null;
+  const libGroupIds = new Set(), libLvl = new Set();     // the Library's tag filter: every picked group, any picked number
+  let libUntagged = false, libTagsOpen = false;
+
   function loadLibrary(force) {
     if (libItems && !force) return Promise.resolve(libItems);
     return fetch('/api/library', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(d => {
       if (!d) return libItems || [];
       libInfo = { root: d.root, dirs: d.dirs };
+      libLoadedAt = Date.now();
       libItems = d.items.filter(x => !x.missing).map(x => ({
         id: x.id, authorName: '', desc: x.title, createTime: x.added, library: true,
         coverSrc: `api/library/covers/${x.id}.jpg`, videoPath: `api/library/videos/${x.id}.mp4`,
@@ -1946,7 +2057,7 @@
 
   const GEAR_PATH = '<path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>';
   const SETTINGS_KEY = 'sp_settings';
-  let settings = { profileUrl: '', debugBanner: false, numericName: '', numericMin: 10, numericMax: 23, scoutEnabled: false, scoutDaily: 100, scoutMin: 60, scoutFrom: 0, scoutTo: 23 };
+  let settings = { profileUrl: '', tgDb: '', tgSyncMin: 1, debugBanner: false, numericName: '', numericMin: 10, numericMax: 23, scoutEnabled: false, scoutDaily: 100, scoutMin: 60, scoutFrom: 0, scoutTo: 23 };
   // The one-per-video number (10–23) is called "numeric tags" unless the user renames it in Settings
   const NUM_EMPTY = '#';
   const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -2459,7 +2570,7 @@
     hid.append(hidStatus, hidRow);
 
     // ── Telegram downloader pins ──
-    const tg = section('Telegram downloader', 'Videos you pin in the Telegram downloader show up in the Library tab by themselves (every 10 minutes, or press Sync now). Unpin one there and it leaves the Library. The downloader’s files and database are only read, never changed. Give the path to its db.sqlite as this server sees it; its downloads folder must sit next to it.');
+    const tg = section('Telegram downloader', 'Videos you pin in the Telegram downloader show up in the Library tab by themselves, tagged \u201ctg\u201d. Unpin one there and it leaves the Library. The downloader’s files and database are only read, never changed. Give the path to its db.sqlite as this server sees it; its downloads folder must sit next to it.');
     const tgRow = document.createElement('div');
     tgRow.className = 'set-try';
     const tgIn = document.createElement('input');
@@ -2468,16 +2579,13 @@
     const tgBtn = document.createElement('button');
     tgBtn.className = 'set-btn'; tgBtn.textContent = 'Sync now';
     const tgStatus = document.createElement('div'); tgStatus.className = 'set-status';
-    const TG_ERR = { NOT_SET: 'Not set up.', NO_DATABASE: 'That is not a database file this server can read.', NO_SQLITE3: 'This server has no sqlite tool (update the image).',
-      QUERY_FAILED: 'The database could not be read (is the downloader mid-write? try again).', BAD_OUTPUT: 'The database answered something unexpected.',
-      FILES_NOT_FOUND: 'Pins found, but their files were not found next to the database. The Library was left as it was.' };
     const tgShow = st => {
       const l = st && st.last;
       if (!st || !st.configured) { tgStatus.textContent = 'Off. Enter the path to turn it on.'; return; }
       if (!l) { tgStatus.textContent = 'Waiting for the first sync…'; return; }
       const when = scoutAgo(l.at);
       tgStatus.textContent = l.ok
-        ? l.rows + ' pinned video' + (l.rows === 1 ? '' : 's') + ' (' + l.found + ' file' + (l.found === 1 ? '' : 's') + ' found); ' + l.added + ' added, ' + l.removed + ' removed. Synced ' + when + '.'
+        ? l.rows + ' pinned video' + (l.rows === 1 ? '' : 's') + ' (' + l.found + ' file' + (l.found === 1 ? '' : 's') + ' found); ' + l.added + ' added, ' + l.removed + ' removed. Synced ' + when + '.' + (l.tagError ? ' ' + (TG_ERR[l.tagError] || 'The \u201ctg\u201d tag could not be saved yet.') : '')
         : (TG_ERR[l.error] || 'Sync failed (' + l.error + ').') + ' (' + when + ')';
     };
     const tgSync = () => {
@@ -2498,7 +2606,22 @@
     });
     tgBtn.addEventListener('click', tgSync);
     tgRow.append(tgIn, tgBtn);
-    tg.append(tgRow, tgStatus);
+    const tgEvery = document.createElement('div');
+    tgEvery.className = 'set-try';
+    const tgEveryLab = document.createElement('span'); tgEveryLab.textContent = 'Check for new pins every'; tgEveryLab.style.cssText = 'color:#ccc;font-size:14px;flex:1;min-width:0';
+    const tgEveryIn = document.createElement('input');
+    tgEveryIn.className = 'set-input set-try-input'; tgEveryIn.type = 'number'; tgEveryIn.min = '1'; tgEveryIn.max = '1440'; tgEveryIn.step = '1'; tgEveryIn.style.maxWidth = '84px';
+    tgEveryIn.value = String(Number.isInteger(settings.tgSyncMin) ? settings.tgSyncMin : 1);
+    const tgEveryUnit = document.createElement('span'); tgEveryUnit.textContent = 'min'; tgEveryUnit.style.cssText = 'color:#888;font-size:13px';
+    let tgEveryTimer = null;
+    tgEveryIn.addEventListener('input', () => {
+      clearTimeout(tgEveryTimer);
+      const v = parseInt(tgEveryIn.value, 10);
+      if (!Number.isInteger(v) || v < 1 || v > 1440) { tgStatus.textContent = 'Minutes between checks: a whole number from 1 to 1440.'; return; }
+      tgEveryTimer = setTimeout(() => saveSettings({ tgSyncMin: v }).then(m => { tgStatus.textContent = m || 'Saved: every ' + v + ' minute' + (v === 1 ? '' : 's') + '.'; }), 450);
+    });
+    tgEvery.append(tgEveryLab, tgEveryIn, tgEveryUnit);
+    tg.append(tgRow, tgEvery, tgStatus);
     fetch('/api/library/tg-sync', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(st => { if (tgStatus.isConnected && tgStatus.textContent === '') tgShow(st); }).catch(() => {});
 
     // ── this device ──
@@ -2525,7 +2648,7 @@
   let starsTabActive = false;
   let starsViewEl    = null;
   let activeView       = '__tagged__'; // null (All Stars / selected groups) | '__tagged__' | '__super__' | '__lvl_groups__' | '__ungrouped__' (Untagged) | '__disappeared__'
-  let activeGroupIds   = new Set();   // empty = all stars; non-empty = union of selected groups
+  let activeGroupIds   = new Set();   // empty = all stars; non-empty = videos that are in every selected group (a filter)
   let activeLvl        = new Set();   // empty = no filter; set of numbers = multi-select
   let mobileStarsLvlOpen = false;     // mobile: whether inline lvl strip is visible
   let mobileStarsGroupsOpen = false;  // mobile: whether group picker panel is expanded
@@ -3112,21 +3235,18 @@
           baseVideos = [...baseVideos, ...lvlOnly];
         }
       } else {
-        // union of all selected groups (starred + lvl-only)
-        const seen = new Set();
+        // only videos that are in every selected group (starred + lvl-only): the tags work as a filter
+        const sel = [...activeGroupIds].map(gid => groups.find(x => x.id === gid)).filter(Boolean);
         baseVideos = [];
-        activeGroupIds.forEach(gid => {
-          const g = groups.find(x => x.id === gid);
-          if (!g) return;
-          g.videoIds.forEach(id => {
-            if (seen.has(id)) return; seen.add(id);
-            if (stars[id]) {
-              baseVideos.push({ ...stars[id], id });
-            } else {
-              baseVideos.push({ id, coverSrc: coverSrcFor(id), authorName: '', desc: '', lvlOnly: true });
-            }
+        if (sel.length) {
+          const inAll = sel.slice(1).map(g => new Set(g.videoIds));
+          const seen = new Set();
+          sel[0].videoIds.forEach(id => {
+            if (seen.has(id) || !inAll.every(set => set.has(id))) return; seen.add(id);
+            if (stars[id]) baseVideos.push({ ...stars[id], id });
+            else baseVideos.push({ id, coverSrc: coverSrcFor(id), authorName: '', desc: '', lvlOnly: true });
           });
-        });
+        }
       }
 
       const videosToShow = visibleOnly(sortVideos(activeLvl.size > 0
@@ -3138,7 +3258,7 @@
       else if (activeGroupIds.size === 1) {
         const gid = [...activeGroupIds][0];
         titleText = groups.find(g => g.id === gid)?.name || 'Group';
-      } else titleText = `${activeGroupIds.size} Groups`;
+      } else titleText = [...activeGroupIds].map(gid => groups.find(g => g.id === gid)?.name || '?').join(' + ');
 
       mainHeader.innerHTML =
         `<span class="stars-main-title">${titleText}</span>` +
@@ -3152,7 +3272,7 @@
         empty.id = 'stars-empty';
         empty.innerHTML = isAll
           ? 'No starred videos yet.<br>Click ★ on any video in Likes, Favorites, or Following.'
-          : 'No videos in this group yet.<br>Star videos and use ⊕ to add them here.';
+          : activeGroupIds.size > 1 ? 'No video has all of these tags.<br>Pick fewer tags to widen the filter.' : 'No videos in this group yet.<br>Star videos and use ⊕ to add them here.';
         grid.appendChild(empty);
       } else {
         fillGrid(grid, videosToShow, star => {
@@ -9197,11 +9317,15 @@ render();
 
       /* ── Stars view ── */
       #stars-view { display:none; flex-direction:row; flex:1; min-height:0; overflow:hidden; }
-      #stars-sidebar { width:200px; flex-shrink:0; background:#1a1a1a; border-right:1px solid #3a3a3a; display:flex; flex-direction:column; overflow-y:auto; padding:8px 0; }
+      #stars-sidebar, #lib-sidebar { width:200px; flex-shrink:0; background:#1a1a1a; border-right:1px solid #3a3a3a; display:flex; flex-direction:column; overflow-y:auto; padding:8px 0; }
       .grid-sentinel { grid-column: 1 / -1; height: 1px; }
       .stars-sidebar-divider { border:none; border-top:1px solid #3a3a3a; margin:6px 0; }
       .stars-group-item { display:flex; align-items:center; justify-content:space-between; padding:7px 14px; cursor:pointer; font-size:13px; transition:background .1s; gap:6px; }
       .stars-group-item:hover { background:#262626; }
+      .stars-group-item.dim { opacity:.45; }
+      #lib-layout { display:flex; flex:1; min-height:0; position:relative; }
+      #lib-main { flex:1; min-width:0; display:flex; flex-direction:column; min-height:0; }
+      .lib-side-note { padding:8px 14px; font-size:12px; color:#777; line-height:1.4; }
       .stars-group-item.active { background:#2e2e2e; color:var(--active,#d7d7d7); }
       .stars-group-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .stars-group-count { font-size:11px; color:#666; flex-shrink:0; }
@@ -9280,7 +9404,7 @@ render();
       .overlay-lvl-btn { font-size:11px; font-weight:700; letter-spacing:.5px; }
 
       /* ── Stars sidebar lvl numbered filter ── */
-      #stars-lvl-grid {
+      #stars-lvl-grid, #lib-lvl-grid {
         display:grid; grid-template-columns:repeat(4,1fr); gap:4px;
         padding:2px 6px 8px;
       }
@@ -9447,6 +9571,8 @@ render();
         /* Stars: hide sidebar, show compact mobile header instead */
         #stars-view { flex-direction: column; }
         #stars-sidebar { display: none !important; }
+        #lib-sidebar { display: none; position: absolute; left: 0; top: 0; bottom: 0; width: 78%; max-width: 280px; z-index: 6; box-shadow: 6px 0 24px rgba(0,0,0,.6); }
+        #lib-sidebar.open { display: flex; }
         #stars-main-header { display: none !important; }
         #stars-grid { padding: 10px 12px; gap: 10px; }
         /* ── Mobile stars: title-only header ── */
