@@ -192,7 +192,7 @@ function addFiles(files) {
 
 // Items kept in step with another program's list (the Telegram downloader's pins): added when they appear on the list,
 // forgotten when they leave it. A file you removed by hand does not come back. Files are never touched.
-// paths: absolute paths of the files on the list. -> { added, removed, total }
+// paths: absolute paths of the files on the list. -> { added, removed, total, addedIds, removedIds, allIds }
 function syncManaged(src, paths) {
   const cur = load();
   const want = new Map();
@@ -201,17 +201,18 @@ function syncManaged(src, paths) {
     if (r && VIDEO_EXT.test(r)) want.set(idFor(r), r);
   }
   let added = 0, removed = 0, i = 0;
+  const addedIds = [], removedIds = [];
   const now = Date.now();
   for (const [id, r] of want) {
     if (cur.items[id] || cur.skipped[id]) continue;
     cur.items[id] = { path: r, added: now - i++, src };    // list order: first on the list = newest
-    added++;
+    added++; addedIds.push(id);
   }
-  for (const [id, x] of Object.entries(cur.items)) if (x.src === src && !want.has(id)) { delete cur.items[id]; removed++; }
+  for (const [id, x] of Object.entries(cur.items)) if (x.src === src && !want.has(id)) { delete cur.items[id]; removed++; removedIds.push(id); }
   let cleared = 0;
   for (const id of Object.keys(cur.skipped)) if (!want.has(id)) { delete cur.skipped[id]; cleared++; }     // off the list: a later re-pin counts as new
   if (added || removed || cleared) save(cur);
-  return { added, removed, total: want.size };
+  return { added, removed, total: want.size, addedIds, removedIds, allIds: Object.entries(cur.items).filter(([, x]) => x.src === src).map(([id]) => id) };
 }
 
 // A video this app made itself (in the appdata "generated" folder) goes straight into the library

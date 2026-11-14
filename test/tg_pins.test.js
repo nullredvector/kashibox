@@ -28,6 +28,7 @@ const setPins = rows => {
   sql('DROP TABLE IF EXISTS downloads; CREATE TABLE downloads (id INTEGER PRIMARY KEY, file_path TEXT, file_type TEXT, status TEXT, pinned INTEGER DEFAULT 0);');
   rows.forEach(r => sql(`INSERT INTO downloads (file_path, file_type, status, pinned) VALUES ('${r.p}', '${r.type || 'video'}', '${r.status || 'completed'}', ${r.pinned ? 1 : 0});`));
 };
+const groupIds = () => { const g = dbStars.load().groups.find(x => x.name === 'tg'); return g ? g.videoIds.slice().sort() : null; };
 const names = () => library.list().map(x => x.title).sort();
 
 test('settings: tgDb must be an absolute path to a .sqlite / .db file', () => {
@@ -50,6 +51,8 @@ test('pinned completed videos appear in the Library; others do not', opts, async
   assert.equal(r.ok, true);
   assert.deepEqual([r.rows, r.found, r.added, r.removed], [2, 2, 2, 0]);
   assert.deepEqual(names(), ['a', 'b']);
+  assert.equal(groupIds().length, 2, 'every imported video is in the "tg" group');
+  assert.deepEqual(groupIds(), library.list().map(x => x.id).sort());
   assert.equal(library.fileFor(library.list()[0].id).endsWith('.f4v') || library.fileFor(library.list()[1].id).endsWith('.f4v'), true, '.f4v is a Library format');
 });
 
@@ -59,6 +62,7 @@ test('a second sync changes nothing; a new pin is added; an unpin leaves the Lib
   const r = await tgPins.syncNow();
   assert.deepEqual([r.added, r.removed], [1, 1]);
   assert.deepEqual(names(), ['a', 'f']);
+  assert.deepEqual(groupIds(), library.list().map(x => x.id).sort(), 'the unpinned one left the group, the new one joined');
   assert.ok(fs.existsSync(path.join(dl, 'b.mp4')), 'the file itself is never touched');
 });
 
@@ -75,12 +79,27 @@ test('a pin you removed by hand stays removed while it is still pinned; a re-pin
   assert.deepEqual(names(), ['a', 'f']);
 });
 
+test('the "tg" group: other groups and stars are kept; a video taken out by hand is not put back', opts, async () => {
+  const d = dbStars.load();
+  d.stars['999'] = { id: '999', coverSrc: 'data/Likes/covers/999.jpg' };
+  d.groups.push({ id: 'other', name: 'Other', videoIds: ['999'] });
+  const aId = library.list().find(x => x.title === 'a').id;
+  d.groups.find(x => x.name === 'tg').videoIds = d.groups.find(x => x.name === 'tg').videoIds.filter(id => id !== aId);   // taken out by hand
+  assert.equal(dbStars.saveGuarded(d, dbStars.currentRev()).code, 200);
+  setPins([{ p: 'chat one/videos/a.f4v', pinned: 1 }, { p: 'chat one/videos/f.mp4', pinned: 1 }, { p: touch('g.mp4'), pinned: 1 }]);
+  await tgPins.syncNow();
+  const after = dbStars.load();
+  assert.ok(after.stars['999'] && after.groups.find(x => x.name === 'Other').videoIds[0] === '999');
+  const ids = Object.fromEntries(library.list().map(x => [x.title, x.id]));
+  assert.deepEqual(groupIds(), [ids.f, ids.g].sort(), 'a stays out, the new g joined');
+});
+
 test('pins whose files cannot be found leave the Library as it was', opts, async () => {
   setPins([{ p: 'chat one/videos/missing1.mp4', pinned: 1 }, { p: 'chat one/videos/missing2.mp4', pinned: 1 }]);
   const r = await tgPins.syncNow();
   assert.equal(r.ok, false);
   assert.equal(r.error, 'FILES_NOT_FOUND');
-  assert.deepEqual(names(), ['a', 'f']);
+  assert.deepEqual(names(), ['a', 'f', 'g']);
 });
 
 test('paths that climb out of the downloads folder or are absolute are ignored', opts, () => {
@@ -97,4 +116,12 @@ test('a database that is not there is an error code, not a crash', opts, async (
   assert.ok(['QUERY_FAILED', 'BAD_OUTPUT'].includes(r.error), r.error);
   dbStars.saveSettings({ tgDb: path.join(root, 'nope.sqlite') });
   assert.equal((await tgPins.syncNow()).error, 'NO_DATABASE');
+});
+
+test('the interval setting: 1 to 1440 minutes, default 1', () => {
+  assert.equal(dbStars.saveSettings({ tgSyncMin: 5 }).tgSyncMin, 5);
+  assert.equal(tgPins.intervalMs(), 5 * 60000);
+  assert.equal(dbStars.saveSettings({ tgSyncMin: 0 }).tgSyncMin, 5, 'out of range is ignored');
+  assert.equal(dbStars.saveSettings({ tgSyncMin: 1441 }).tgSyncMin, 5);
+  assert.equal(dbStars.saveSettings({ tgSyncMin: 1 }).tgSyncMin, 1);
 });
