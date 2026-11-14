@@ -73,7 +73,7 @@ function coverFor(videoUrl) { return videoUrl.replace('/videos/', '/covers/').re
 function authorFeed(archiveDir, videoPath, hidden) {
   const m = VIDEO_PATH.exec(videoPath || '');
   if (!m) return null;
-  const alone = { videos: [{ videoUrl: videoPath, coverUrl: coverFor(videoPath), wide: isWide(archiveDir, videoPath) }], index: 0 };
+  const alone = { videos: [{ videoUrl: videoPath, coverUrl: coverFor(videoPath), wide: wideCached(videoPath) }], index: 0 };
   let idx;
   try { idx = build(archiveDir); } catch (_) { return alone; }
   const aid = idx.authorOf.get(m[2]);
@@ -89,32 +89,35 @@ function authorFeed(archiveDir, videoPath, hidden) {
   return {
     videos: slice.map(e => {
       const videoUrl = `/data/${e.dir}/videos/${e.id}.mp4`;
-      return { videoUrl, coverUrl: coverFor(videoUrl), wide: isWide(archiveDir, videoUrl) };
+      return { videoUrl, coverUrl: coverFor(videoUrl), wide: wideCached(videoUrl) };
     }),
     index: start - from,
   };
 }
 
-// n random downloaded videos from any account -> [{ videoUrl, coverUrl }] (the TV's feed when no phone has published one)
+// n random downloaded videos from any account -> [{ videoUrl, coverUrl, wide }] (the TV's feed when no phone has published
+// one). The shuffle is made once per database state, so the same videos come back and their covers are remembered.
+let deck = { idx: null, list: [] };
 function shuffled(archiveDir, n) {
   let idx;
   try { idx = build(archiveDir); } catch (_) { return []; }
-  const all = [];
-  idx.byAuthor.forEach(list => list.forEach(e => all.push(e)));
-  const take = Math.min(n, all.length);
-  for (let i = 0; i < take; i++) {
-    const j = i + Math.floor(Math.random() * (all.length - i));
-    [all[i], all[j]] = [all[j], all[i]];
+  if (deck.idx !== idx) {
+    const all = [];
+    idx.byAuthor.forEach(list => list.forEach(e => all.push(e)));
+    for (let i = all.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [all[i], all[j]] = [all[j], all[i]];
+    }
+    deck = { idx, list: all };
   }
-  return all.slice(0, take).map(e => {
+  return deck.list.slice(0, n).map(e => {
     const videoUrl = `/data/${e.dir}/videos/${e.id}.mp4`;
-    return { videoUrl, coverUrl: coverFor(videoUrl), wide: isWide(archiveDir, videoUrl) };
+    return { videoUrl, coverUrl: coverFor(videoUrl), wide: wideCached(videoUrl) };
   });
 }
 
 // Is this video landscape? The cover is the video's first frame, so its size says it; a JPEG states its size in the first
 // bytes, so only those are read. Unknown (no file, not a JPEG, a path outside the archive) counts as portrait.
-const wideCache = new Map();
 function jpegSize(buf) {
   if (buf.length < 4 || buf[0] !== 0xFF || buf[1] !== 0xD8) return null;
   let i = 2;
@@ -130,21 +133,73 @@ function jpegSize(buf) {
   }
   return null;
 }
-function isWide(archiveDir, videoPath) {
-  if (!VIDEO_PATH.test(videoPath || '')) return false;
-  if (wideCache.has(videoPath)) return wideCache.get(videoPath);
-  let wide = false;
+// The covers sit on a slow disk, so reading them must never block the server (Node does everything on one thread) or crowd
+// out video streaming: reads are asynchronous, a few at a time, and each answer is remembered. A request never waits on
+// more than a short time budget; what is not known yet counts as portrait and fills in from the background reads.
+const WIDE_PARALLEL = 3;
+const HEAD_BYTES = 32768;
+const wideCache = new Map();    // video path -> boolean
+const wideBusy = new Map();     // video path -> Promise of a queued or running read
+const wideQueue = [];           // { archiveDir, videoPath, done }
+let wideRunning = 0;
+
+const wideCached = videoPath => wideCache.get(videoPath) === true;
+
+async function readWide(archiveDir, videoPath) {
+  let fh;
   try {
-    const fd = fs.openSync(path.join(archiveDir, coverFor(videoPath)), 'r');
-    try {
-      const buf = Buffer.alloc(65536);
-      const n = fs.readSync(fd, buf, 0, buf.length, 0);
-      const size = jpegSize(buf.subarray(0, n));
-      wide = !!size && size.width > size.height;
-    } finally { fs.closeSync(fd); }
-  } catch (_) { /* no cover: portrait */ }
-  wideCache.set(videoPath, wide);
-  return wide;
+    fh = await fs.promises.open(path.join(archiveDir, coverFor(videoPath)), 'r');
+    const buf = Buffer.alloc(HEAD_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, HEAD_BYTES, 0);
+    const size = jpegSize(buf.subarray(0, bytesRead));
+    return !!size && size.width > size.height;
+  } catch (_) {
+    return false;               // no cover, unreadable: portrait
+  } finally {
+    if (fh) await fh.close().catch(() => {});
+  }
+}
+
+function pumpWide() {
+  while (wideRunning < WIDE_PARALLEL && wideQueue.length) {
+    const job = wideQueue.shift();
+    wideRunning++;
+    readWide(job.archiveDir, job.videoPath).then(wide => {
+      wideCache.set(job.videoPath, wide);
+      wideRunning--;
+      wideBusy.delete(job.videoPath);
+      job.done(wide);
+      pumpWide();
+    });
+  }
+}
+
+// urgent = the answer is needed now: it goes to the front of the queue
+function ensureWide(archiveDir, videoPath, urgent) {
+  if (!VIDEO_PATH.test(videoPath || '')) return Promise.resolve(false);
+  if (wideCache.has(videoPath)) return Promise.resolve(wideCache.get(videoPath));
+  if (wideBusy.has(videoPath)) {
+    if (urgent) {
+      const at = wideQueue.findIndex(j => j.videoPath === videoPath);
+      if (at > 0) wideQueue.unshift(wideQueue.splice(at, 1)[0]);
+    }
+    return wideBusy.get(videoPath);
+  }
+  const promise = new Promise(done => { wideQueue[urgent ? 'unshift' : 'push']({ archiveDir, videoPath, done }); });
+  wideBusy.set(videoPath, promise);
+  pumpWide();
+  return promise;
+}
+
+// Start reading these covers in the background (nothing waits for it)
+function warmWide(archiveDir, videoPaths) {
+  videoPaths.slice(0, 400).forEach(v => { ensureWide(archiveDir, v, false); });
+}
+
+// Wait for these (in this order of importance) for at most `ms`; whatever is still being read carries on in the background
+function wideWithin(archiveDir, videoPaths, ms) {
+  const reads = videoPaths.map((v, i) => ensureWide(archiveDir, v, i === 0));
+  return Promise.race([Promise.all(reads), new Promise(r => setTimeout(r, ms))]);
 }
 
 // A short label for a set of videos: the accounts they belong to, e.g. '@one, @two, @three +2' ('' if none are known)
@@ -167,4 +222,4 @@ function parseVideoPath(videoPath) {
   return m ? { id: m[2], coverSrc: coverFor(videoPath).replace(/^\//, '') } : null;
 }
 
-module.exports = { authorFeed, labelFor, parseVideoPath, shuffled, isWide, jpegSize };
+module.exports = { authorFeed, labelFor, parseVideoPath, shuffled, jpegSize, wideCached, wideWithin, warmWide };
