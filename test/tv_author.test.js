@@ -71,3 +71,49 @@ test('wideWithin ignores paths that are not video paths', async () => {
   await wideWithin('/nonexistent', ['/etc/passwd', '', null, '/data/x/videos/../../1.mp4'], 500);
   assert.strictEqual(wideCached('/etc/passwd'), false);
 });
+
+// Library videos have no cover file: their size comes from ffprobe (a video stored rotated counts as shown)
+const { spawnSync } = require('node:child_process');
+const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
+
+test('Library videos are measured with ffprobe, rotation included', { skip: !hasFfmpeg && 'ffmpeg is not installed' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kashi-lib-'));
+  try {
+    const lib = fs.realpathSync(dir);
+    fs.mkdirSync(path.join(lib, 'files'));
+    fs.mkdirSync(path.join(lib, 'arch', 'data', '.appdata'), { recursive: true });
+    process.env.ARCHIVE_DIR = path.join(lib, 'arch');           // read by library.js when it is first loaded
+    const make = (name, size, rotate) => {
+      const f = path.join(lib, 'files', name);
+      const base = path.join(lib, 'files', 'base-' + name);
+      spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', `testsrc=size=${size}:rate=5`, '-t', '1', '-pix_fmt', 'yuv420p', rotate ? base : f]);
+      if (rotate) spawnSync('ffmpeg', ['-v', 'error', '-display_rotation', '90', '-i', base, '-c', 'copy', f]);
+      return f;
+    };
+    const files = {
+      wide: make('wide.mp4', '640x360'),
+      portrait: make('portrait.mp4', '360x640'),
+      shownWide: make('shownwide.mp4', '360x640', true),      // stored portrait, rotated: shown landscape
+      shownPortrait: make('shownportrait.mp4', '640x360', true),
+    };
+    const items = {}, ids = {};
+    Object.entries(files).forEach(([k, f], n) => {
+      const id = 'l' + require('node:crypto').createHash('sha1').update(fs.realpathSync(f)).digest('hex').slice(0, 12);
+      items[id] = { path: fs.realpathSync(f), added: n };
+      ids[k] = `/api/library/videos/${id}.mp4`;
+    });
+    fs.writeFileSync(path.join(lib, 'arch', 'data', '.appdata', 'library.json'), JSON.stringify({ dirs: [path.join(lib, 'files')], items, skipped: {} }));
+    await wideWithin(lib, Object.values(ids), 20000);
+    assert.strictEqual(wideCached(ids.wide), true);
+    assert.strictEqual(wideCached(ids.portrait), false);
+    assert.strictEqual(wideCached(ids.shownWide), true);
+    assert.strictEqual(wideCached(ids.shownPortrait), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an unknown Library id counts as portrait', async () => {
+  await wideWithin('/nonexistent', ['/api/library/videos/l000000000000.mp4'], 5000);
+  assert.strictEqual(wideCached('/api/library/videos/l000000000000.mp4'), false);
+});

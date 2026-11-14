@@ -4,6 +4,7 @@
 const fs   = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const { execFile } = require('child_process');
 
 const MAX_LIST = 300;
 const FILES = ['db_videos.js', 'db_likes.js', 'db_bookmarked.js', 'db_following.js', 'db_authors.js'];
@@ -66,6 +67,7 @@ function build(archiveDir) {
 }
 
 const VIDEO_PATH = /^\/data\/(Likes|Favorites|Following\/[^/]+)\/videos\/([^/]+)\.mp4$/;
+const LIBRARY_PATH = /^\/api\/library\/videos\/(l[0-9a-f]{12})\.mp4$/;   // Library videos: files added by hand
 
 function coverFor(videoUrl) { return videoUrl.replace('/videos/', '/covers/').replace(/\.mp4$/, '.jpg'); }
 
@@ -133,7 +135,7 @@ function jpegSize(buf) {
   }
   return null;
 }
-// The covers sit on a slow disk, so reading them must never block the server (Node does everything on one thread) or crowd
+// The covers (and videos) sit on a slow disk, so reading them must never block the server (Node does everything on one thread) or crowd
 // out video streaming: reads are asynchronous, a few at a time, and each answer is remembered. A request never waits on
 // more than a short time budget; what is not known yet counts as portrait and fills in from the background reads.
 const WIDE_PARALLEL = 3;
@@ -145,7 +147,31 @@ let wideRunning = 0;
 
 const wideCached = videoPath => wideCache.get(videoPath) === true;
 
+// A Library video has no cover file next to it, so ask ffprobe for the real size (turned if the video is stored rotated)
+function probeShape(file) {
+  return new Promise(resolve => {
+    execFile('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height:stream_side_data=rotation:stream_tags=rotate',
+      '-of', 'json', file], { timeout: 20000, maxBuffer: 1 << 20 }, (err, out) => {
+      if (err) return resolve(null);
+      try {
+        const st = JSON.parse(out).streams[0];
+        let { width, height } = st;
+        const side = (st.side_data_list || []).map(x => x.rotation).find(x => x !== undefined);
+        const rot = Math.abs(Number(side !== undefined ? side : (st.tags && st.tags.rotate) || 0));
+        if (rot === 90 || rot === 270) [width, height] = [height, width];
+        resolve({ width, height });
+      } catch (_) { resolve(null); }
+    });
+  });
+}
+
 async function readWide(archiveDir, videoPath) {
+  const lib = LIBRARY_PATH.exec(videoPath);
+  if (lib) {
+    const file = require('./library').fileFor(lib[1]);
+    const size = file ? await probeShape(file) : null;
+    return !!size && size.width > size.height;
+  }
   let fh;
   try {
     fh = await fs.promises.open(path.join(archiveDir, coverFor(videoPath)), 'r');
@@ -176,7 +202,7 @@ function pumpWide() {
 
 // urgent = the answer is needed now: it goes to the front of the queue
 function ensureWide(archiveDir, videoPath, urgent) {
-  if (!VIDEO_PATH.test(videoPath || '')) return Promise.resolve(false);
+  if (!VIDEO_PATH.test(videoPath || '') && !LIBRARY_PATH.test(videoPath || '')) return Promise.resolve(false);
   if (wideCache.has(videoPath)) return Promise.resolve(wideCache.get(videoPath));
   if (wideBusy.has(videoPath)) {
     if (urgent) {
